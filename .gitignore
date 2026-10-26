@@ -1,0 +1,27 @@
+﻿# DonnÃ©es locales
+data/*
+!data/.gitkeep
+
+# Rapports gÃ©nÃ©rÃ©s
+reports/*
+!reports/.gitkeep
+
+# Secrets et configuration locale
+config/config.local.json
+.env
+.env.*
+
+# Python
+__pycache__/
+.venv/
+venv/
+
+# Node
+node_modules/
+
+# IDE
+.vscode/
+.idea/
+
+# Logs
+*.log

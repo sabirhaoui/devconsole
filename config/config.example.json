@@ -1,0 +1,26 @@
+﻿{
+  "name": "DevConsole",
+  "version": "1.0.0",
+  "workspace": "C:\\workspace",
+  "history": {
+    "enabled": true,
+    "file": "data\\history.jsonl",
+    "maxEntries": 1000
+  },
+  "aliases": {
+    "gs": "git status",
+    "gl": "git log --oneline -10",
+    "py": "python",
+    "ll": "Get-ChildItem"
+  },
+  "tools": {
+    "git": "git",
+    "python": "python",
+    "node": "node",
+    "npm": "npm",
+    "podman": "podman",
+    "docker": "docker",
+    "kubectl": "kubectl",
+    "terraform": "terraform"
+  }
+}
