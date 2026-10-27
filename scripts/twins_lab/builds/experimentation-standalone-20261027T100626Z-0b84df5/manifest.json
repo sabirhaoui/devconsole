@@ -1,0 +1,15 @@
+{
+  "buildId": "experimentation-standalone-20261027T100626Z-0b84df5",
+  "component": "experimentation",
+  "buildMode": "standalone-isolated",
+  "commitSha1": "0b84df5d5e315d5ce16da871aa9db6fcc1869f06",
+  "branch": "doc",
+  "workingTreeClean": false,
+  "modifiedFiles": [
+    "?? backend/local_debug_experimentation.db"
+  ],
+  "buildTimestampUtc": "20261027T100626Z",
+  "pythonVersion": "3.14.8",
+  "manifestPath": "C:\\workspace\\devConsole\\scripts\\twins_lab\\components\\experimentation.toml",
+  "standalone": false
+}

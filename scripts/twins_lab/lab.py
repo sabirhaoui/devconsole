@@ -302,19 +302,45 @@ def backend_env(m: dict) -> dict:
 
 
 def cmd_test(args, cfg, root):
-    m, _ = load_component(args.component)
-    rc = 0
-    if args.side in (None, "backend") and "backend" in m:
-        tests = m["backend"]["tests"]
-        if args.unit:
-            tests = [t for t in tests if "integration" not in t]
-        rc |= sh([python_exe(cfg), "-m", "pytest", *tests, *args.extra], root / "backend", backend_env(m))
-    if args.side in (None, "frontend") and "frontend" in m:
-        npx = shutil.which("npx") or "npx"
-        rel = Path(m["frontend"]["dir"]).relative_to("frontend").as_posix()
-        rc |= sh([npx, "jest", rel, *args.extra], root / "frontend")
-    sys.exit(rc)
+    comps = list(manifests().keys()) if args.component == "all" else [args.component]
+    global_rc = 0
 
+    for comp_name in comps:
+        print(f"\n========================================================")
+        print(f" Executing tests for component: {comp_name}")
+        print(f"========================================================")
+        
+        # Charge le composant courant
+        try:
+            m, _ = load_component(comp_name)
+        except SystemExit:
+            print(f"Skipping unknown or invalid component: {comp_name}")
+            continue
+
+        rc = 0
+        if args.side in (None, "backend") and "backend" in m:
+            tests = m["backend"]["tests"]
+            if args.unit:
+                tests = [t for t in tests if "integration" not in t]
+            if tests:
+                rc |= sh([python_exe(cfg), "-m", "pytest", *tests, *args.extra], root / "backend", backend_env(m))
+            else:
+                print(f"  (No backend tests defined for {comp_name})")
+                
+        if args.side in (None, "frontend") and "frontend" in m:
+            if "dir" in m["frontend"]:
+                npx = shutil.which("npx") or "npx"
+                rel = Path(m["frontend"]["dir"]).relative_to("frontend").as_posix()
+                rc |= sh([npx, "jest", rel, *args.extra], root / "frontend")
+        
+        global_rc |= rc
+
+    if args.component == "all":
+        print(f"\n========================================================")
+        print(f" Global test execution finished with exit code: {global_rc}")
+        print(f"========================================================")
+    
+    sys.exit(global_rc)
 
 def cmd_run(args, cfg, root):
     m, mpath = load_component(args.component)
@@ -356,14 +382,18 @@ def main():
     p_build.set_defaults(fn=cmd_build)
 
     for name, fn in (("inspect", cmd_inspect), ("test", cmd_test), ("up", cmd_up), ("down", cmd_down)):
-        p = sub.add_parser(name)
-        p.add_argument("component")
-        if name in ("inspect", "test"):
-            p.add_argument("--side", choices=["backend", "frontend"])
-        if name == "test":
-            p.add_argument("--unit", action="store_true", help="skip integration tests (no DB needed)")
-        p.set_defaults(fn=fn)
-        
+            p = sub.add_parser(name)
+            if name == "test":
+                p.add_argument("component", nargs="?", default="all", help="Component name or 'all' for everything")
+            else:
+                p.add_argument("component")
+                
+            if name in ("inspect", "test"):
+                p.add_argument("--side", choices=["backend", "frontend"])
+            if name == "test":
+                p.add_argument("--unit", action="store_true", help="skip integration tests (no DB needed)")
+            p.set_defaults(fn=fn)
+            
     p = sub.add_parser("run")
     p.add_argument("component")
     p.add_argument("side", choices=["backend", "frontend"])
