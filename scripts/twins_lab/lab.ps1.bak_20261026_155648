@@ -1,0 +1,3 @@
+# Usage:  .\lab.ps1 inspect experimentation
+& python "$PSScriptRoot\lab.py" @args
+exit $LASTEXITCODE

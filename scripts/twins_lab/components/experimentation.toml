@@ -1,0 +1,30 @@
+name        = "experimentation"
+description = "R&D journeys / runs / review (backend module + Angular page)"
+
+[backend]
+package  = "app.modules.experimentation"
+dir      = "backend/app/modules/experimentation"
+# VERIFY after `lab inspect`: the object exposed by router.py (an APIRouter)
+router   = "app.modules.experimentation.router:router"
+prefix   = "/api/v1/experimentation"        # VERIFY against app/main.py include_router(...)
+port     = 8100
+services = ["postgres"]                      # VERIFY service names in docker-compose.yml
+# paths are relative to backend/
+tests = [
+  "tests/unit/experimentation",
+  "tests/integration/experimentation",
+]
+
+[backend.env]
+# VERIFY the real variable names in app/modules/shared/config.py and .env.example
+LLM_PROVIDER = "mock"
+
+[backend.overrides]
+# "dependency to replace" = "lab replacement"  (both as module:attr)
+# Fill from the outbound list of `lab inspect experimentation`, typically auth:
+# "app.modules.identity.dependencies:get_current_user" = "lab_stubs:fake_user"
+
+[frontend]
+dir   = "frontend/src/app/pages/experimentation"
+route = "/experimentation"
+port  = 4300

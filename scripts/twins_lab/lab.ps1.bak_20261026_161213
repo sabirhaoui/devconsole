@@ -1,0 +1,93 @@
+﻿<#
+.SYNOPSIS
+    Script central de gestion du laboratoire twins_lab (DevConsole).
+.DESCRIPTION
+    Permet d'exécuter des diagnostics (doctor) et des tests ciblés par module (ex: test experimentation).
+#>
+
+[CmdletBinding()]
+param(
+    [Parameter(Position=0)]
+    [ValidateSet("doctor", "test", "map")]
+    [string]$Action = "doctor",
+
+    [Parameter(Position=1)]
+    [string]$Target = ""
+)
+
+$ErrorActionPreference = "Stop"
+$ScriptDir = $PSScriptRoot
+$TwinsProject = "C:\workspace\twins_project"
+$BackendDir = Join-Path $TwinsProject "backend"
+
+function Invoke-ExperimentationTests {
+    Write-Host "=== [TWINS_LAB] Exécution des tests : experimentation ===" -ForegroundColor Cyan
+    
+    Set-Location -Path $BackendDir
+
+    # Détection de l'environnement virtuel
+    $PythonExe = "python"
+    foreach ($venv in @(".venv", "venv")) {
+        $candidate = Join-Path $BackendDir "$venv\Scripts\python.exe"
+        if (Test-Path $candidate) {
+            $PythonExe = $candidate
+            Write-Host "[*] Environnement virtuel détecté : $candidate" -ForegroundColor Green
+            break
+        }
+    }
+
+    # Injection des variables d'environnement de test
+    Write-Host "[*] Configuration des variables d'environnement isolées..." -ForegroundColor Yellow
+    $env:JWT_SECRET_KEY = "test_jwt_secret_key_for_isolation_purposes_only"
+    $env:DATABASE_URL = "sqlite:///:memory:"
+    $env:ENVIRONMENT = "test"
+
+    # Exécution combinée des tests unitaires et d'intégration du module experimentation
+    Write-Host "[*] Lancement de pytest (Unité & Intégration) pour experimentation..." -ForegroundColor Yellow
+    
+    $TestPaths = @(
+        "tests/unit/experimentation",
+        "tests/integration/experimentation"
+    )
+
+    $globalSuccess = $true
+    foreach ($path in $TestPaths) {
+        if (Test-Path (Join-Path $BackendDir $path)) {
+            Write-Host "`n--- Exécution de : $path ---" -ForegroundColor DarkCyan
+            & $PythonExe -m pytest $path -v --tb=short
+            if ($LASTEXITCODE -ne 0) {
+                $globalSuccess = $false
+            }
+        }
+    }
+
+    if ($globalSuccess) {
+        Write-Host "`n[+] Tous les tests du module experimentation ont réussi avec succès !" -ForegroundColor Green
+    } else {
+        Write-Host "`n[-] Certains tests ont échoué." -ForegroundColor Red
+        exit 1
+    }
+}
+
+# Routage des actions
+switch ($Action) {
+    "doctor" {
+        Write-Host "=== [TWINS_LAB] Diagnostic de l'environnement ===" -ForegroundColor Cyan
+        Write-Host "[+] Dossier lab : $ScriptDir" -ForegroundColor Green
+        Write-Host "[+] Projet cible : $TwinsProject" -ForegroundColor Green
+    }
+    "test" {
+        if ($Target -eq "experimentation") {
+            Invoke-ExperimentationTests
+        } else {
+            Write-Host "[-] Module de test inconnu ou non spécifié : '$Target'. Essayez 'experimentation'." -ForegroundColor Red
+            exit 1
+        }
+    }
+    "map" {
+        Write-Host "[*] Lancement de la cartographie..." -ForegroundColor Yellow
+        # Appel optionnel au script de cartographie
+        $MapScript = Join-Path $ScriptDir "map_experimentation.ps1"
+        if (Test-Path $MapScript) { & $MapScript }
+    }
+}

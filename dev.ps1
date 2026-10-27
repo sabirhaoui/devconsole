@@ -13,6 +13,7 @@ $ErrorActionPreference = 'Stop'
 $Root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $ConfigPath = Join-Path $Root 'config\config.example.json'
 $HistoryPath = Join-Path $Root 'data\history.jsonl'
+$DevScriptPath = Join-Path $Root 'dev.ps1'
 
 function Write-DevInfo {
     param([string]$Message)
@@ -22,6 +23,28 @@ function Write-DevInfo {
 function Write-DevError {
     param([string]$Message)
     Write-Host "[Erreur] $Message" -ForegroundColor Red
+}
+
+function Enable-LabShortcut {
+    $profileDir = Split-Path -Parent $PROFILE
+    if (!(Test-Path -LiteralPath $profileDir)) {
+        New-Item -ItemType Directory -Force -Path $profileDir | Out-Null
+    }
+    if (!(Test-Path -LiteralPath $PROFILE)) {
+        New-Item -ItemType File -Force -Path $PROFILE | Out-Null
+    }
+
+    $labSnippet = "`nfunction lab { & `"$DevScriptPath`" lab @args }"
+    $profileContent = Get-Content -LiteralPath $PROFILE -ErrorAction SilentlyContinue
+
+    if (-not ($profileContent | Select-String "function lab")) {
+        Add-Content -Path $PROFILE -Value $labSnippet
+        Write-DevInfo "Raccourci global 'lab' activé avec succès dans le profil PowerShell."
+    }
+
+    # Correction : Fige le chemin absolu du script dans la session active
+    $scriptBlock = [scriptblock]::Create("& `"$DevScriptPath`" lab @args")
+    Set-Item -Path "function:global:lab" -Value $scriptBlock
 }
 
 function Get-DevConfig {
@@ -62,30 +85,32 @@ function Add-DevHistory {
 function Show-DevHelp {
     Write-Host "DevConsole - aide"
     Write-Host "-----------------"
-    Write-Host "dev help                 Affiche cette aide"
-    Write-Host "dev version              Affiche la version"
-    Write-Host "dev status               Affiche l environnement"
-    Write-Host "dev config               Affiche la configuration"
-    Write-Host "dev aliases              Affiche les alias documentes"
-    Write-Host "dev history              Affiche les commandes recentes"
-    Write-Host "dev init                 Lance l inventaire des outils"
-    Write-Host "dev run <commande>       Execute une commande externe"
+    Write-Host "dev help                Affiche cette aide"
+    Write-Host "dev version             Affiche la version"
+    Write-Host "dev status              Affiche l environnement"
+    Write-Host "dev config              Affiche la configuration"
+    Write-Host "dev aliases             Affiche les alias documentes"
+    Write-Host "dev history             Affiche les commandes recentes"
+    Write-Host "dev init                Lance l inventaire des outils"
+    Write-Host "dev run <commande>      Execute une commande externe"
+    Write-Host 'dev lab doctor          Diagnostique twins_lab'
+    Write-Host 'dev lab list            Liste les composants du projet'
+    Write-Host 'dev lab inspect <module>  Analyse les dependances'
+    Write-Host 'dev lab test <module>     Lance les tests du composant'
+    Write-Host 'dev lab run <module>      Lance un composant isole'
     Write-Host ""
     Write-Host "Exemples :"
     Write-Host "  .\dev.ps1 status"
     Write-Host "  .\dev.ps1 run git --version"
-    Write-Host "  .\dev.ps1 run python --version"
-    Write-Host ""
-    Write-Host "Le script ne modifie pas automatiquement les installations de logiciels."
 }
 
 function Show-DevStatus {
     Write-Host "Projet       : DevConsole"
     Write-Host "Version      : 1.0.0"
-    Write-Host "RÃ©pertoire   : $Root"
+    Write-Host "Répertoire   : $Root"
     Write-Host "PowerShell   : $($PSVersionTable.PSVersion)"
-    Write-Host "ExÃ©cutable   : $((Get-Process -Id $PID).Path)"
-    Write-Host "RÃ©pertoire courant : $((Get-Location).Path)"
+    Write-Host "Exécutable   : $((Get-Process -Id $PID).Path)"
+    Write-Host "Répertoire courant : $((Get-Location).Path)"
 
     foreach ($tool in @('git', 'python', 'node', 'npm', 'podman', 'docker')) {
         $found = Get-Command $tool -ErrorAction SilentlyContinue
@@ -121,18 +146,24 @@ function Invoke-DevExternalCommand {
     return 0
 }
 
+# Rafraîchissement automatique et activation immédiate du raccourci dans la session active
+Enable-LabShortcut
+
 switch ($Command.ToLowerInvariant()) {
     'help' {
         Show-DevHelp
         break
     }
-    '--help' {
-        Show-DevHelp
-        break
-    }
-    '-h' {
-        Show-DevHelp
-        break
+    'lab' {
+        $labScript = Join-Path $PSScriptRoot 'scripts\twins_lab\lab.ps1'
+
+        if (-not (Test-Path -LiteralPath $labScript -PathType Leaf)) {
+            Write-Error "Script twins_lab introuvable : $labScript"
+            exit 2
+        }
+
+        & $labScript @Arguments
+        exit 0
     }
     'version' {
         Write-Host 'DevConsole 1.0.0'
