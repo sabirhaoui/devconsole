@@ -9,7 +9,6 @@
 [CmdletBinding()]
 param(
     [Parameter(Position=0)]
-    [ValidateSet("doctor", "component", "list")]
     [string]$Action = "doctor",
 
     [Parameter(Position=1)]

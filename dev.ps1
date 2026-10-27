@@ -155,16 +155,22 @@ switch ($Command.ToLowerInvariant()) {
         break
     }
     'lab' {
-        $labScript = Join-Path $PSScriptRoot 'scripts\twins_lab\lab.ps1'
+            $labPy = Join-Path $PSScriptRoot 'scripts\twins_lab\lab.py'
 
-        if (-not (Test-Path -LiteralPath $labScript -PathType Leaf)) {
-            Write-Error "Script twins_lab introuvable : $labScript"
-            exit 2
+            if (-not (Test-Path -LiteralPath $labPy -PathType Leaf)) {
+                Write-Error "Script lab.py introuvable : $labPy"
+                exit 2
+            }
+
+            # Utilisation de Python pour exécuter lab.py avec tous les arguments
+            $pythonExe = "python"
+            if (Get-Command "python3" -ErrorAction SilentlyContinue) {
+                $pythonExe = "python3"
+            }
+
+            & $pythonExe $labPy @Arguments
+            exit $LASTEXITCODE
         }
-
-        & $labScript @Arguments
-        exit 0
-    }
     'version' {
         Write-Host 'DevConsole 1.0.0'
         break
