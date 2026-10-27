@@ -62,7 +62,10 @@ def python_exe(cfg: dict) -> str:
 def sh(cmd: list[str], cwd: Path, env: dict | None = None) -> int:
     print(f"\n$ {' '.join(map(str, cmd))}\n  (cwd: {cwd})\n")
     try:
-        return subprocess.call(cmd, cwd=cwd, env=env)
+        # Sur Windows, activer shell=True permet de résoudre correctement les commandes comme docker ou npx
+        use_shell = os.name == "nt"
+        # Si shell=True sous Windows, subprocess accepte une chaîne de caractères ou gère la liste via cmd.exe
+        return subprocess.call(cmd, cwd=cwd, env=env, shell=use_shell)
     except KeyboardInterrupt:
         return 130
 
