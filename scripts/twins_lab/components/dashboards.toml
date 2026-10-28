@@ -1,0 +1,11 @@
+name = "dashboards"
+description = "Composant découvert automatiquement par le lab scan"
+
+[backend]
+dir = "backend/app/modules/dashboards"
+package = "app.modules.dashboards"
+test_paths = ["tests/unit/dashboards"]
+
+[frontend]
+dir = "src/app/pages/dashboards"
+test_paths = ["src/app/pages/dashboards"]

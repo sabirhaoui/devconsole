@@ -1,5 +1,6 @@
-name        = "experimentation"
-description = "R&D journeys / runs / review (backend module + Angular page)"
+[component]
+name = "experimentation"
+description = "Module d'expérimentation, builder et run engine"
 
 [backend]
 package  = "app.modules.experimentation"
@@ -10,7 +11,7 @@ prefix   = "/api/v1/experimentation"        # VERIFY against app/main.py include
 port     = 8100
 services = ["postgres"]                      # VERIFY service names in docker-compose.yml
 # paths are relative to backend/
-tests = [
+test_paths = [
   "tests/unit/experimentation",
   "tests/integration/experimentation",
 ]
@@ -20,11 +21,19 @@ tests = [
 LLM_PROVIDER = "mock"
 
 [backend.overrides]
-# "dependency to replace" = "lab replacement"  (both as module:attr)
+# FastAPI dependency overrides, both values as module:attr.
 # Fill from the outbound list of `lab inspect experimentation`, typically auth:
 # "app.modules.identity.dependencies:get_current_user" = "lab_stubs:fake_user"
+
+[backend.patches]
+# Replace imported service functions before loading the component router.
+# Use only when a specific endpoint should run without its external service.
+# "app.modules.studio_v2.repos:list_nodes_by_ids" = "lab_stubs:empty_nodes"
 
 [frontend]
 dir   = "frontend/src/app/pages/experimentation"
 route = "/experimentation"
 port  = 4300
+test_paths = [
+  "src/app/pages/experimentation",
+]

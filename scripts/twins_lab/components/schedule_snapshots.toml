@@ -1,0 +1,7 @@
+name = "schedule_snapshots"
+description = "Composant découvert automatiquement par le lab scan"
+
+[backend]
+dir = "backend/app/modules/schedule_snapshots"
+package = "app.modules.schedule_snapshots"
+test_paths = ["tests/unit/schedule_snapshots"]

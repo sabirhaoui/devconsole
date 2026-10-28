@@ -1,0 +1,7 @@
+name = "studio_v2"
+description = "Composant découvert automatiquement par le lab scan"
+
+[backend]
+dir = "backend/app/modules/studio_v2"
+package = "app.modules.studio_v2"
+test_paths = ["tests/unit/studio_v2"]

@@ -1,0 +1,7 @@
+name = "operational_graph"
+description = "Composant découvert automatiquement par le lab scan"
+
+[backend]
+dir = "backend/app/modules/operational_graph"
+package = "app.modules.operational_graph"
+test_paths = ["tests/unit/operational_graph"]

@@ -1,0 +1,7 @@
+name = "connectors"
+description = "Composant découvert automatiquement par le lab scan"
+
+[backend]
+dir = "backend/app/modules/connectors"
+package = "app.modules.connectors"
+test_paths = ["tests/unit/connectors"]

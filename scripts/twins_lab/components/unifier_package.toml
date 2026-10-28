@@ -1,0 +1,7 @@
+name = "unifier_package"
+description = "Composant découvert automatiquement par le lab scan"
+
+[backend]
+dir = "backend/app/modules/unifier_package"
+package = "app.modules.unifier_package"
+test_paths = ["tests/unit/unifier_package"]

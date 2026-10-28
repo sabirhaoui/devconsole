@@ -1,0 +1,7 @@
+name = "identity"
+description = "Composant découvert automatiquement par le lab scan"
+
+[backend]
+dir = "backend/app/modules/identity"
+package = "app.modules.identity"
+test_paths = ["tests/unit/identity"]

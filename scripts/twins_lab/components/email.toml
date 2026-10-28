@@ -1,0 +1,7 @@
+name = "email"
+description = "Composant découvert automatiquement par le lab scan"
+
+[backend]
+dir = "backend/app/modules/email"
+package = "app.modules.email"
+test_paths = ["tests/unit/email"]

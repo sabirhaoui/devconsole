@@ -1,5 +1,4 @@
 # twins_lab global settings
 [project]
 root   = "C:/workspace/twins_project"   # override with $env:TWINS_ROOT
-# Python of the BACKEND virtualenv (needs fastapi, uvicorn, pytest + project deps)
-python = "python"                       # e.g. "C:/workspace/twins_project/backend/.venv/Scripts/python.exe"
+# Backend commands use backend/.venv/Scripts/python.exe when present, otherwise sys.executable.

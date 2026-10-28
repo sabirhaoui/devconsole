@@ -1,0 +1,7 @@
+name = "assystan"
+description = "Composant découvert automatiquement par le lab scan"
+
+[backend]
+dir = "backend/app/modules/assystan"
+package = "app.modules.assystan"
+test_paths = ["tests/unit/assystan"]

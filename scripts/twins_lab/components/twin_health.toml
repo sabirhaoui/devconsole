@@ -1,0 +1,7 @@
+name = "twin_health"
+description = "Composant découvert automatiquement par le lab scan"
+
+[backend]
+dir = "backend/app/modules/twin_health"
+package = "app.modules.twin_health"
+test_paths = ["tests/unit/twin_health"]

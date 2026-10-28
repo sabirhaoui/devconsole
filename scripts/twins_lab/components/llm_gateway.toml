@@ -1,0 +1,7 @@
+name = "llm_gateway"
+description = "Composant découvert automatiquement par le lab scan"
+
+[backend]
+dir = "backend/app/modules/llm_gateway"
+package = "app.modules.llm_gateway"
+test_paths = ["tests/unit/llm_gateway"]

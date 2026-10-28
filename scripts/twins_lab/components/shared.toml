@@ -1,0 +1,11 @@
+name = "shared"
+description = "Composant découvert automatiquement par le lab scan"
+
+[backend]
+dir = "backend/app/modules/shared"
+package = "app.modules.shared"
+test_paths = ["tests/unit/shared"]
+
+[frontend]
+dir = "src/app/shared"
+test_paths = ["src/app/shared"]

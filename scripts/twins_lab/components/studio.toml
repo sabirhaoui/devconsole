@@ -1,0 +1,11 @@
+name = "studio"
+description = "Composant découvert automatiquement par le lab scan"
+
+[backend]
+dir = "backend/app/modules/studio"
+package = "app.modules.studio"
+test_paths = ["tests/unit/studio"]
+
+[frontend]
+dir = "src/app/studio"
+test_paths = ["src/app/studio"]

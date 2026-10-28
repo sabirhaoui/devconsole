@@ -1,0 +1,7 @@
+name = "document_graph"
+description = "Composant découvert automatiquement par le lab scan"
+
+[backend]
+dir = "backend/app/modules/document_graph"
+package = "app.modules.document_graph"
+test_paths = ["tests/unit/document_graph"]

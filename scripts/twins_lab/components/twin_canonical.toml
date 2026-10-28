@@ -1,0 +1,7 @@
+name = "twin_canonical"
+description = "Composant découvert automatiquement par le lab scan"
+
+[backend]
+dir = "backend/app/modules/twin_canonical"
+package = "app.modules.twin_canonical"
+test_paths = ["tests/unit/twin_canonical"]

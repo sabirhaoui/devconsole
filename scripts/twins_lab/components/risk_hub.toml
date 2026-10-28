@@ -1,0 +1,7 @@
+name = "risk_hub"
+description = "Composant découvert automatiquement par le lab scan"
+
+[backend]
+dir = "backend/app/modules/risk_hub"
+package = "app.modules.risk_hub"
+test_paths = ["tests/unit/risk_hub"]

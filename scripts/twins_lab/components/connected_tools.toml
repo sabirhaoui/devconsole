@@ -1,0 +1,7 @@
+name = "connected_tools"
+description = "Composant découvert automatiquement par le lab scan"
+
+[backend]
+dir = "backend/app/modules/connected_tools"
+package = "app.modules.connected_tools"
+test_paths = ["tests/unit/connected_tools"]

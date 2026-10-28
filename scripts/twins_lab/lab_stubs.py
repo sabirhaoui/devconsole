@@ -4,5 +4,13 @@ from types import SimpleNamespace
 
 
 async def fake_user():
-    return SimpleNamespace(id="00000000-0000-0000-0000-000000000001", email="lab@local",
-                           is_active=True, is_admin=True, permissions=["*"])
+    return SimpleNamespace(
+        id="00000000-0000-0000-0000-000000000001",
+        email="lab@local",
+        name="Twins Lab",
+        is_active=True,
+        is_admin=True,
+        profile=SimpleNamespace(
+            permissions=[SimpleNamespace(permission="*", conditions=None)]
+        ),
+    )

@@ -1,0 +1,7 @@
+name = "diff"
+description = "Composant découvert automatiquement par le lab scan"
+
+[backend]
+dir = "backend/app/modules/diff"
+package = "app.modules.diff"
+test_paths = ["tests/unit/diff"]

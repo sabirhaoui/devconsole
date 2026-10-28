@@ -3,7 +3,10 @@
 
 Commands
   list                          components declared in components/*.toml
-  doctor                        check the toolchain and the repo path
+  scan component                scan backend/app/modules/ to auto-discover and register components
+  doctor                        check toolchain, dependencies, databases and runtime
+  install --check               verify lab prerequisites without installing
+  install all                   install system tools and project dependencies
   init <comp>                   initialize local fixtures, stubs, and isolated environment for a component
   build <comp> [--standalone]   build and generate a traceability manifest with Git SCM info
   inspect <comp> [--side ..]    what the component imports from / is imported by the rest of the app
@@ -21,6 +24,7 @@ import json
 import os
 import re
 import shutil
+import socket
 import subprocess
 import sys
 import tomllib
@@ -35,36 +39,55 @@ BUILDS_DIR = LAB / "builds"
 
 # --------------------------------------------------------------------------- config
 def load_cfg() -> tuple[dict, Path]:
-    cfg = tomllib.loads((LAB / "lab.toml").read_text(encoding="utf-8"))
-    root = Path(os.environ.get("TWINS_ROOT") or cfg["project"]["root"]).expanduser()
+    cfg_file = LAB / "lab.toml"
+    cfg = tomllib.loads(cfg_file.read_text(encoding="utf-8")) if cfg_file.exists() else {"project": {}}
+    root = Path(os.environ.get("TWINS_ROOT") or cfg.get("project", {}).get("root", "C:/workspace/twins_project")).expanduser()
     return cfg, root
 
 
 def manifests() -> dict[str, Path]:
-    return {p.stem: p for p in sorted((LAB / "components").glob("*.toml"))}
+    comp_dir = LAB / "components"
+    if not comp_dir.exists():
+        comp_dir.mkdir(parents=True, exist_ok=True)
+    return {p.stem: p for p in sorted(comp_dir.glob("*.toml"))}
 
 
 def load_component(name: str) -> tuple[dict, Path]:
     ms = manifests()
     if name not in ms:
-        sys.exit(f"Unknown component '{name}'. Known: {', '.join(ms) or '(none)'}")
+        known = ", ".join(ms.keys()) if ms else "(aucun composant déclaré dans components/)"
+        sys.exit(
+            f"[-] Erreur : Composant '{name}' inconnu.\n"
+            f"[+] Composants connus : {known}\n"
+            f"[+] Astuce : Lancez 'lab scan component' pour découvrir les modules ou 'lab list' pour afficher les composants."
+        )
     return tomllib.loads(ms[name].read_text(encoding="utf-8")), ms[name]
 
+
+def component_name(m: dict, fallback: str) -> str:
+    return m.get("component", {}).get("name", m.get("name", fallback))
+
+
 def python_exe(cfg: dict) -> str:
-    # Priorité absolue à l'environnement virtuel du backend s'il existe
-    root = Path(os.environ.get("TWINS_ROOT") or cfg["project"]["root"]).expanduser()
-    venv_py = root / "backend" / ".venv" / "Scripts" / "python.exe"
+    root = Path(os.environ.get("TWINS_ROOT") or cfg.get("project", {}).get("root", "")).expanduser()
+    venv_bin = "Scripts/python.exe" if os.name == "nt" else "bin/python"
+    venv_py = root / "backend" / ".venv" / Path(venv_bin)
     if venv_py.exists():
         return str(venv_py)
-    return cfg["project"].get("python") or sys.executable
+    return sys.executable
+
+
+def npx_exe() -> str:
+    executable = shutil.which("npx")
+    if sys.platform.startswith("win"):
+        return executable or shutil.which("npx.CMD") or shutil.which("npx.cmd") or "npx.CMD"
+    return executable or "npx"
 
 
 def sh(cmd: list[str], cwd: Path, env: dict | None = None) -> int:
     print(f"\n$ {' '.join(map(str, cmd))}\n  (cwd: {cwd})\n")
     try:
-        # Sur Windows, activer shell=True permet de résoudre correctement les commandes comme docker ou npx
         use_shell = os.name == "nt"
-        # Si shell=True sous Windows, subprocess accepte une chaîne de caractères ou gère la liste via cmd.exe
         return subprocess.call(cmd, cwd=cwd, env=env, shell=use_shell)
     except KeyboardInterrupt:
         return 130
@@ -173,26 +196,492 @@ def show(title: str, rows: dict, with_files: bool = True):
 
 # ----------------------------------------------------------------------- commands
 def cmd_list(args, cfg, root):
-    for name, path in manifests().items():
-        m = tomllib.loads(path.read_text(encoding="utf-8"))
-        sides = [s for s in ("backend", "frontend") if s in m]
-        print(f"{name:<20} [{'+'.join(sides)}]    {m.get('description', '')}")
+    ms = manifests()
+    print("=== [TWINS_LAB] Liste des Composants Déclarés ===")
+    if not ms:
+        print("  (aucun fichier .toml trouvé dans scripts/twins_lab/components/)\n")
+        print("  Astuce : Exécutez 'lab scan component' pour découvrir automatiquement les composants.")
+        return
+
+    print(f"{'COMPOSANT':<20} {'CÔTÉS (SIDES)':<18} {'DESCRIPTION'}")
+    print("-" * 65)
+    for name, path in ms.items():
+        try:
+            m = tomllib.loads(path.read_text(encoding="utf-8"))
+            sides = [s for s in ("backend", "frontend") if s in m]
+            sides_str = " + ".join(sides) if sides else "aucun"
+            desc = m.get("component", {}).get("description", m.get("description", "(pas de description)"))
+            print(f"{name:<20} [{sides_str:<15}] {desc}")
+        except Exception as exc:
+            print(f"{name:<20} [erreur fichier]     Erreur de lecture: {exc}")
+    print("-" * 65)
+
+def cmd_scan(args, cfg, root):
+    print("=== [TWINS_LAB] SCAN : Découverte automatique (Backend & Frontend) ===")
+    backend_modules = root / "backend" / "app" / "modules"
+    if not backend_modules.is_dir():
+        print(f"[-] Dossier introuvable : {backend_modules}")
+        return
+
+    comp_dir = LAB / "components"
+    comp_dir.mkdir(parents=True, exist_ok=True)
+
+    discovered = 0
+    updated = 0
+    for item in sorted(backend_modules.iterdir()):
+        if item.is_dir() and not item.name.startswith("_"):
+            comp_name = item.name
+            toml_path = comp_dir / f"{comp_name}.toml"
+            
+            # Chemins de tests backend
+            test_paths = []
+            for test_sub in [root / "backend" / "tests" / "unit" / comp_name, root / "backend" / "tests" / "integration" / comp_name]:
+                if test_sub.is_dir():
+                    test_paths.append(test_sub.relative_to(root / "backend").as_posix())
+            if not test_paths:
+                test_paths = [f"tests/unit/{comp_name}"]
+
+            # Recherche d'un dossier frontend associé dans l'application Angular
+            fe_candidates = [
+                root / "frontend" / "src" / "app" / "pages" / comp_name,
+                root / "frontend" / "src" / "app" / "features" / comp_name,
+                root / "frontend" / "src" / "app" / comp_name
+            ]
+            fe_dir = next((c for c in fe_candidates if c.is_dir()), None)
+            has_frontend = fe_dir is not None
+            fe_rel_path = fe_dir.relative_to(root / "frontend").as_posix() if has_frontend else f"src/app/pages/{comp_name}"
+
+            if not toml_path.exists():
+                toml_content = f"""name = "{comp_name}"
+description = "Composant découvert automatiquement par le lab scan"
+
+[backend]
+dir = "backend/app/modules/{comp_name}"
+package = "app.modules.{comp_name}"
+test_paths = {json.dumps(test_paths)}
+"""
+                if has_frontend:
+                    toml_content += f"""
+[frontend]
+dir = "{fe_rel_path}"
+test_paths = ["{fe_rel_path}"]
+"""
+                toml_path.write_text(toml_content, encoding="utf-8")
+                print(f"[+] Composant créé{' avec frontend' if has_frontend else ''} : {comp_name}")
+                discovered += 1
+            else:
+                # Met à jour le TOML existant si un frontend est détecté mais absent du fichier
+                content = toml_path.read_text(encoding="utf-8")
+                if has_frontend and "[frontend]" not in content:
+                    content += f"""
+[frontend]
+dir = "{fe_rel_path}"
+test_paths = ["{fe_rel_path}"]
+"""
+                    toml_path.write_text(content, encoding="utf-8")
+                    print(f"[+] Section [frontend] ajoutée au composant : {comp_name}")
+                    updated += 1
+                else:
+                    print(f"[=] Composant déjà à jour : {comp_name}")
+
+    print(f"\n[SUCCESS] Scan terminé. {discovered} créé(s), {updated} mis à jour.")
+    print("[+] Exécutez 'lab list' pour vérifier les côtés détectés.")
+def check_python_requirements(python: str, requirements: Path) -> tuple[bool, str]:
+    script = """
+import sys
+from importlib.metadata import PackageNotFoundError, version
+from pathlib import Path
+from pip._vendor.packaging.requirements import Requirement
+from pip._vendor.packaging.version import Version
+
+missing = []
+visited = set()
+def inspect_file(path):
+    path = path.resolve()
+    if path in visited:
+        return
+    visited.add(path)
+    for raw in path.read_text(encoding="utf-8").splitlines():
+        line = raw.split("#", 1)[0].strip()
+        if not line:
+            continue
+        if line.startswith(("-r ", "--requirement ")):
+            inspect_file(path.parent / line.split(None, 1)[1])
+            continue
+        if line.startswith("-"):
+            continue
+        try:
+            requirement = Requirement(line)
+        except ValueError as exc:
+            missing.append(f"cannot verify requirement {line!r}: {exc}")
+            continue
+        if requirement.marker and not requirement.marker.evaluate():
+            continue
+        try:
+            installed = Version(version(requirement.name))
+        except PackageNotFoundError:
+            missing.append(f"{requirement.name}{requirement.specifier} is not installed")
+            continue
+        if requirement.specifier and not requirement.specifier.contains(installed, prereleases=True):
+            missing.append(f"{requirement.name}: installed {installed}, required {requirement.specifier}")
+
+inspect_file(Path(sys.argv[1]))
+if missing:
+    print("\\n".join(missing))
+    sys.exit(1)
+print("All active requirements are installed at compatible versions.")
+"""
+    try:
+        result = subprocess.run(
+            [python, "-c", script, str(requirements)],
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return False, str(exc)
+    return result.returncode == 0, (result.stdout or result.stderr).strip()
 
 
 def cmd_doctor(args, cfg, root):
-    def check(label, ok, hint=""):
-        print(f"    [{'OK' if ok else '!!'}] {label}" + ("" if ok else f"    -> {hint}"))
+    failures = 0
+    phase = getattr(args, "phase", "all")
+    checks = []
 
-    print(f"project root: {root}")
-    check("repo found", (root / "backend").is_dir() and (root / "frontend").is_dir(), "set project.root in lab.toml or $env:TWINS_ROOT")
-    check(f"python {sys.version.split()[0]}", sys.version_info >= (3, 11), "need >= 3.11")
+    def check(label, ok, hint="", required=True, stage="build"):
+        nonlocal failures
+        if phase == "build" and stage == "run":
+            return
+        status = "OK" if ok else ("FAIL" if required else "WARN")
+        checks.append({
+            "label": label,
+            "status": status,
+            "required": required,
+            "stage": stage,
+            "details": "" if ok else hint,
+        })
+        if not getattr(args, "json", False):
+            scope = "RUN" if stage == "run" else "BUILD"
+            print(f"    [{status}] [{scope}] {label}" + ("" if ok or not hint else f" -> {hint}"))
+        if not ok and required:
+            failures += 1
+
+    def run_version(command, cwd=None, timeout=15):
+        try:
+            result = subprocess.run(
+                command,
+                cwd=cwd,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+                shell=os.name == "nt" and Path(command[0]).suffix.lower() in {".bat", ".cmd"},
+            )
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            return None, str(exc)
+        output = "\n".join(part.strip() for part in (result.stdout, result.stderr) if part.strip())
+        return (output if result.returncode == 0 else None), output
+
+    if not getattr(args, "json", False):
+        print(f"\nTWINS LAB - verification des prerequis\nproject root: {root}")
+    check("Répertoire backend", (root / "backend").is_dir(), "Définir TWINS_ROOT ou project.root dans lab.toml.")
+    check("Répertoire frontend", (root / "frontend").is_dir(), "Définir TWINS_ROOT ou project.root dans lab.toml.")
+    check("Python >= 3.11", sys.version_info >= (3, 11),
+          f"Version actuelle : {sys.version.split()[0]}. Installer Python 3.11 ou plus récent.")
+
     py = python_exe(cfg)
-    for mod in ("fastapi", "uvicorn", "pytest"):
-        r = subprocess.run([py, "-c", f"import {mod}"], capture_output=True)
-        check(f"{mod} importable with '{py}'", r.returncode == 0, f"point project.python at the backend venv ({root}\\backend\\.venv\\Scripts\\python.exe)")
-    check("docker", shutil.which("docker") is not None, "needed only for `up`/integration tests")
-    check("node/npx", shutil.which("npx") is not None, "needed only for the frontend side")
-    check("frontend/node_modules", (root / "frontend" / "node_modules").is_dir(), "run `npm ci` in frontend/")
+    if Path(py).exists() or shutil.which(py):
+        backend_venv = root / "backend" / ".venv"
+        check("Environnement virtuel Python backend",
+              (backend_venv / ("Scripts/python.exe" if os.name == "nt" else "bin/python")).is_file(),
+              f"Exécuter lab install all pour créer {backend_venv}.")
+        requirements = root / "backend" / "requirements.txt"
+        check("Manifeste backend/requirements.txt", requirements.is_file(),
+              "Restaurer le manifeste des dépendances backend.")
+        if requirements.is_file():
+            requirements_ok, requirements_output = check_python_requirements(py, requirements)
+            check(f"Dépendances Python installées ({py})", requirements_ok,
+                  requirements_output or f"Exécuter {py} -m pip install -r {requirements}.")
+        pip_result, pip_error = run_version([py, "-m", "pip", "--version"])
+        check("pip disponible dans l'environnement backend", pip_result is not None,
+              pip_error or f"Exécuter {py} -m ensurepip.")
+        pip_result, pip_error = run_version([py, "-m", "pip", "check"])
+        check("Cohérence des dépendances Python", pip_result is not None,
+              pip_error or f"Exécuter {py} -m pip check.")
+    else:
+        check("Interpréteur Python backend", False, f"Introuvable : {py}. Exécuter lab install all.")
+
+    node_path = shutil.which("node")
+    node_script = (
+        "const semver=require('semver');"
+        "const range=require('./node_modules/@angular/cli/package.json').engines.node;"
+        "console.log(`Node ${process.version}; Angular CLI requires ${range}`);"
+        "if(!semver.satisfies(process.version,range)) process.exit(1);"
+    )
+    node_version, node_error = (
+        run_version([node_path, "-e", node_script], cwd=root / "frontend")
+        if node_path and (root / "frontend" / "node_modules" / "@angular" / "cli" / "package.json").is_file()
+        else (None, "")
+    )
+    check("Version Node.js compatible avec Angular CLI", node_version is not None,
+          node_error or "Installer Node.js 22+ et les dépendances npm du frontend.")
+
+    npm_path = shutil.which("npm")
+    npm_version, npm_error = run_version([npm_path, "--version"]) if npm_path else (None, "")
+    check("npm", npm_version is not None, npm_error or "Installer Node.js LTS, qui inclut npm.")
+
+    npx_path = shutil.which("npx") or shutil.which("npx.CMD") or shutil.which("npx.cmd")
+    npx_version, npx_error = run_version([npx_path, "--version"]) if npx_path else (None, "")
+    check("npx", npx_version is not None, npx_error or "Installer Node.js LTS, qui inclut npx.")
+
+    frontend = root / "frontend"
+    check("Manifeste frontend/package.json", (frontend / "package.json").is_file(),
+          "Restaurer le manifeste du frontend.")
+    lockfile = frontend / "package-lock.json"
+    check("Lockfile frontend/package-lock.json", lockfile.is_file(),
+          "Restaurer le lockfile npm du frontend.")
+    if npm_path and (frontend / "package.json").is_file() and lockfile.is_file():
+        npm_ci, npm_ci_error = run_version(
+            [npm_path, "ci", "--engine-strict", "--dry-run", "--ignore-scripts", "--no-audit", "--no-fund"],
+            cwd=frontend,
+            timeout=180,
+        )
+        check("Résolution reproductible de npm ci", npm_ci is not None,
+              (f"{npm_ci_error[-1500:]}\nCorriger package.json/package-lock.json puis relancer lab install all."
+               if npm_ci_error else
+               "npm ci --dry-run a échoué. Corriger package.json/package-lock.json puis relancer lab install all.")
+              if npm_ci is None else "")
+        npm_ls, npm_error = run_version([npm_path, "ls", "--json"], cwd=frontend, timeout=120)
+        check("Dépendances npm installées dans node_modules", npm_ls is not None,
+              npm_error[:1000] or "Exécuter npm ci dans le répertoire frontend.")
+    else:
+        check("Résolution reproductible de npm ci", False,
+              "Installer npm et restaurer package.json/package-lock.json dans frontend.")
+        check("Dépendances npm installées dans node_modules", False,
+              "Exécuter npm ci dans le répertoire frontend.")
+
+    component_files = manifests()
+    check("configuration des composants presente", bool(component_files), "executer 'lab scan component' ou ajouter un fichier components/<nom>.toml")
+    component_config_errors = []
+    test_config_warnings = []
+    for name, manifest in component_files.items():
+        try:
+            component = tomllib.loads(manifest.read_text(encoding="utf-8"))
+        except (OSError, tomllib.TOMLDecodeError) as exc:
+            component_config_errors.append(f"{name}: {exc}")
+            continue
+        for side in ("backend", "frontend"):
+            if side not in component:
+                continue
+            test_paths = component[side].get("test_paths")
+            valid_paths = isinstance(test_paths, list) and all(
+                isinstance(path, str) and path.strip() for path in test_paths
+            )
+            if not valid_paths or not test_paths:
+                test_config_warnings.append(f"{name}: {side}.test_paths")
+                continue
+            side_root = root / side
+            for test_path in test_paths:
+                if not (side_root / test_path).exists():
+                    test_config_warnings.append(f"{name}: {side}/{test_path}")
+    check("fichiers TOML des composants valides", not component_config_errors,
+          "; ".join(component_config_errors[:3]) or f"{len(component_config_errors)} fichier(s) TOML invalide(s)")
+    check("chemins de tests des composants", not test_config_warnings,
+          f"{len(test_config_warnings)} chemin(s) manquant(s), ex.: {', '.join(test_config_warnings[:3])}",
+          required=False)
+
+    compose_file = root / "docker-compose.yml"
+    try:
+        compose_text = compose_file.read_text(encoding="utf-8")
+    except OSError:
+        compose_text = ""
+    services_match = re.search(r"(?ms)^services:\s*\r?\n(.*?)(?=^[^\s#]|\Z)", compose_text)
+    services_block = services_match.group(1) if services_match else ""
+    compose_services = set(re.findall(r"(?m)^  ([A-Za-z0-9_-]+):\s*$", services_block))
+    required_services = {
+        "nginx", "postgres", "neo4j", "redis", "backend", "mailpit",
+        "celery-worker", "celery-beat", "flower", "seed-db",
+    }
+    check("Services requis déclarés dans docker-compose.yml",
+          compose_file.is_file() and required_services.issubset(compose_services),
+          "Le Compose doit déclarer PostgreSQL, Neo4j, Redis, Mailpit, backend, worker, beat, Flower, Nginx et seed-db.")
+
+    required_env = {
+        "POSTGRES_USER", "POSTGRES_PASSWORD", "POSTGRES_DB",
+        "NEO4J_USER", "NEO4J_PASSWORD", "JWT_SECRET_KEY",
+    }
+    configured_env = {key for key, value in os.environ.items() if value.strip()}
+    env_file = root / ".env"
+    env_values = {}
+    if env_file.is_file():
+        for raw in env_file.read_text(encoding="utf-8", errors="replace").splitlines():
+            entry = raw.strip()
+            if entry and not entry.startswith("#") and "=" in entry:
+                key, value = entry.split("=", 1)
+                key = key.strip().removeprefix("export ").strip()
+                env_values[key] = value.strip()
+                if value.strip():
+                    configured_env.add(key)
+    missing_env = sorted(required_env - configured_env)
+    check("Configuration .env pour PostgreSQL, Neo4j et JWT",
+          not missing_env,
+          f"Créer {env_file} depuis .env.example et renseigner : {', '.join(missing_env)}.")
+    openai_key = os.environ.get("OPENAI_API_KEY", "").strip() or env_values.get("OPENAI_API_KEY", "")
+    check("Clé OpenAI (fonctionnalités Assystan/LLM)", bool(openai_key),
+          "Renseigner OPENAI_API_KEY dans .env pour utiliser les fonctionnalités LLM.",
+          required=False)
+
+    docker_path = shutil.which("docker")
+    if not docker_path and os.name == "nt":
+        default_docker = Path(r"C:\Program Files\Docker\Docker\resources\bin\docker.exe")
+        if default_docker.is_file():
+            docker_path = str(default_docker)
+    docker_version, docker_error = (
+        run_version([docker_path, "--version"]) if docker_path else (None, "")
+    )
+    check("Docker CLI (Docker Desktop)", docker_version is not None,
+          docker_error or "Installer Docker Desktop avec lab install all.")
+    compose_version, compose_error = (
+        run_version([docker_path, "compose", "version", "--short"])
+        if docker_path and docker_version is not None else (None, "")
+    )
+    check("Docker Compose v2", compose_version is not None,
+          compose_error or "Installer ou mettre à jour Docker Desktop (plugin Compose v2).")
+
+    compose_config_valid = False
+    compose_config_error = ""
+    if docker_path and compose_version is not None:
+        config_result, compose_config_error = run_version(
+            [docker_path, "compose", "-f", str(compose_file), "config", "--quiet"],
+            cwd=root,
+        )
+        compose_config_valid = config_result is not None
+    check("Configuration Docker Compose valide", compose_config_valid,
+          compose_config_error[:1000] or "Vérifier docker-compose.yml, .env et Docker Compose v2.")
+
+    if phase != "build":
+        docker_result, docker_error = (
+            run_version([docker_path, "info", "--format", "{{.ServerVersion}}"])
+            if docker_path and compose_version is not None else (None, "")
+        )
+        docker_available = docker_result is not None
+        check("Docker Engine démarré", docker_available,
+              docker_error or "Démarrer Docker Desktop puis relancer le diagnostic.", stage="run")
+
+        running_services = set()
+        running_error = ""
+        if docker_available and compose_config_valid:
+            running, running_error = run_version(
+                [docker_path, "compose", "-f", str(compose_file), "ps", "--services", "--status", "running"],
+                cwd=root,
+            )
+            running_services = set(running.splitlines()) if running else set()
+
+        runtime_services = {
+            "nginx", "postgres", "neo4j", "redis", "backend", "mailpit",
+            "celery-worker", "celery-beat", "flower",
+        }
+        for service in sorted(runtime_services):
+            check(f"Service Docker Compose : {service}",
+                  service in running_services,
+                  (f"Exécuter docker compose up --build -d {service} depuis {root}."
+                   if not running_error else running_error[:1000]),
+                  stage="run")
+
+        postgres_ready, postgres_error = (
+            run_version(
+                [docker_path, "compose", "-f", str(compose_file), "exec", "-T", "postgres", "pg_isready"],
+                cwd=root,
+            )
+            if docker_available and compose_config_valid and "postgres" in running_services
+            else (None, "")
+        )
+        check("PostgreSQL accepte les connexions (pg_isready)",
+              postgres_ready is not None,
+              postgres_error or "Démarrer PostgreSQL : docker compose up -d postgres.",
+              stage="run")
+
+        tcp_checks = (
+            ("PostgreSQL exposé sur localhost:5433", 5433, "docker compose up -d postgres"),
+            ("Neo4j Bolt exposé sur localhost:7687", 7687, "docker compose up -d neo4j"),
+            ("Redis exposé sur localhost:6379", 6379, "docker compose up -d redis"),
+            ("API backend exposée sur localhost:8001", 8001, "docker compose up --build -d backend"),
+            ("Mailpit Web exposé sur localhost:8025", 8025, "docker compose up -d mailpit"),
+            ("Mailpit SMTP exposé sur localhost:1025", 1025, "docker compose up -d mailpit"),
+            ("Flower exposé sur localhost:5555", 5555, "docker compose up --build -d flower"),
+            ("Nginx exposé sur localhost:3000", 3000, "docker compose up -d nginx"),
+            ("Serveur Angular exposé sur localhost:4200", 4200, "Exécuter npm start dans frontend"),
+        )
+        for label, port, action in tcp_checks:
+            try:
+                with socket.create_connection(("127.0.0.1", port), timeout=1.5):
+                    available = True
+            except OSError:
+                available = False
+            check(label, available, f"Vérifier le service et le port {port} ; action : {action}.", stage="run")
+
+    git_path = shutil.which("git")
+    check("Git (métadonnées de build twins_lab)", git_path is not None,
+          "Installer Git pour générer les métadonnées de build.")
+    if (root / "Makefile").is_file():
+        make_path = shutil.which("make") or shutil.which("make.exe")
+        check("GNU Make (commandes Makefile du projet)", make_path is not None,
+              "Installer GNU Make (winget install ezwinports.make).")
+
+    run_failures = sum(
+        item["status"] == "FAIL" and item["required"] and item["stage"] == "run"
+        for item in checks
+    )
+    build_failures = sum(
+        item["status"] == "FAIL" and item["required"] and item["stage"] == "build"
+        for item in checks
+    )
+    if getattr(args, "json", False):
+        print(json.dumps({
+            "project_root": str(root),
+            "phase": phase,
+            "checks": checks,
+            "failures": failures,
+            "build_failures": build_failures,
+            "run_failures": run_failures,
+        }, ensure_ascii=False))
+    elif failures:
+        print(
+            f"\n[FAIL] {failures} prérequis obligatoire(s) manquant(s) ({phase})"
+            f" : build={build_failures}, run={run_failures}."
+        )
+    else:
+        print(f"\n[OK] Les prérequis obligatoires de twins_lab sont satisfaits ({phase}).")
+
+    if failures:
+        raise SystemExit(1)
+
+
+def cmd_install(args, cfg, root):
+    if args.check:
+        cmd_doctor(args, cfg, root)
+        return
+
+    if args.target != "all":
+        print("Usage: lab install --check | lab install all")
+        raise SystemExit(2)
+
+    installer = LAB / "install_needed.ps1"
+    if not installer.is_file():
+        print(f"[FAIL] Script d'installation introuvable : {installer}")
+        raise SystemExit(2)
+    powershell = shutil.which("powershell.exe") or shutil.which("powershell") or shutil.which("pwsh")
+    if not powershell:
+        print("[FAIL] PowerShell est requis pour lancer install_needed.ps1.")
+        raise SystemExit(2)
+    command = [
+        powershell, "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(installer),
+        "-TwinsRoot", str(root), "-InstallDocker",
+    ]
+    if args.skip_backend:
+        command.append("-SkipBackend")
+    if args.skip_frontend:
+        command.append("-SkipFrontend")
+    raise SystemExit(subprocess.call(command, cwd=LAB))
 
 
 def cmd_init(args, cfg, root):
@@ -214,7 +703,6 @@ def cmd_build(args, cfg, root):
     m, mpath = load_component(args.component)
     print(f"[LAB] Building traceability manifest for component '{args.component}'...")
     
-    # Compilation syntaxique ciblée et sécurisée (évite l'erreur d'argument invalide wildcard)
     backend_dir = root / "backend"
     module_backend_dir = backend_dir / m.get("backend", {}).get("dir", f"app/modules/{args.component}")
     if module_backend_dir.is_dir():
@@ -261,7 +749,6 @@ def cmd_build(args, cfg, root):
     manifest_file = build_dir / "manifest.json"
     manifest_file.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
     
-    # Copie du manifeste également à la racine des builds pour un accès rapide
     root_manifest_copy = BUILDS_DIR / f"{args.component}-build-manifest.json"
     root_manifest_copy.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
 
@@ -271,13 +758,14 @@ def cmd_build(args, cfg, root):
 
 def cmd_inspect(args, cfg, root):
     m, _ = load_component(args.component)
+    name = component_name(m, args.component)
     if args.side in (None, "backend") and "backend" in m:
         out, inb = analyze_backend(root, m["backend"])
-        show(f"[{m['name']}] backend -> depends on (outbound)", out)
-        show(f"[{m['name']}] backend <- used by (inbound)", inb)
+        show(f"[{name}] backend -> depends on (outbound)", out)
+        show(f"[{name}] backend <- used by (inbound)", inb)
         print("\n    Tip: every outbound line is something to stub, mock or provide in the lab.")
     if args.side in (None, "frontend") and "frontend" in m:
-        show(f"[{m['name']}] frontend -> depends on (outbound)", analyze_frontend(root, m["frontend"]))
+        show(f"[{name}] frontend -> depends on (outbound)", analyze_frontend(root, m["frontend"]))
 
 
 def compose_file(root: Path) -> Path:
@@ -309,34 +797,53 @@ def cmd_test(args, cfg, root):
     global_rc = 0
 
     for comp_name in comps:
+        m, _ = load_component(comp_name)
+        
+        has_tests = False
+        if args.side in (None, "backend") and "backend" in m:
+            tests = m["backend"].get("test_paths", [])
+            if args.unit:
+                tests = [t for t in tests if "integration" not in t]
+            existing_tests = [t for t in tests if (root / "backend" / t).exists()]
+            if existing_tests:
+                has_tests = True
+
+        if args.side in (None, "frontend") and "frontend" in m:
+            tests = m["frontend"].get("test_paths", [])
+            if tests:
+                has_tests = True
+
+        if args.component == "all" and not has_tests:
+            continue
+
         print(f"\n========================================================")
         print(f" Executing tests for component: {comp_name}")
         print(f"========================================================")
-        
-        # Charge le composant courant
-        try:
-            m, _ = load_component(comp_name)
-        except SystemExit:
-            print(f"Skipping unknown or invalid component: {comp_name}")
-            continue
 
         rc = 0
         if args.side in (None, "backend") and "backend" in m:
-            tests = m["backend"]["tests"]
+            tests = m["backend"].get("test_paths", [])
             if args.unit:
                 tests = [t for t in tests if "integration" not in t]
-            if tests:
-                rc |= sh([python_exe(cfg), "-m", "pytest", *tests, *args.extra], root / "backend", backend_env(m))
+            existing_tests = [t for t in tests if (root / "backend" / t).exists()]
+            if existing_tests:
+                backend_root = Path(os.path.join(str(root), "backend"))
+                rc = sh([python_exe(cfg), "-m", "pytest", *existing_tests, *args.extra], backend_root, backend_env(m))
             else:
-                print(f"  (No backend tests defined for {comp_name})")
+                print(f"  (No existing backend test paths found for {comp_name})")
                 
         if args.side in (None, "frontend") and "frontend" in m:
-            if "dir" in m["frontend"]:
-                npx = shutil.which("npx") or "npx"
-                rel = Path(m["frontend"]["dir"]).relative_to("frontend").as_posix()
-                rc |= sh([npx, "jest", rel, *args.extra], root / "frontend")
+            tests = m["frontend"].get("test_paths", [])
+            if tests:
+                frontend_root = Path(os.path.join(str(root), "frontend"))
+                rc_frontend = sh([npx_exe(), "jest", *tests, *args.extra], frontend_root)
+                if rc == 0:
+                    rc = rc_frontend
+            else:
+                print(f"  (No frontend tests defined for {comp_name})")
         
-        global_rc |= rc
+        if global_rc == 0 and rc != 0:
+            global_rc = rc
 
     if args.component == "all":
         print(f"\n========================================================")
@@ -344,6 +851,7 @@ def cmd_test(args, cfg, root):
         print(f"========================================================")
     
     sys.exit(global_rc)
+
 
 def cmd_run(args, cfg, root):
     m, mpath = load_component(args.component)
@@ -360,52 +868,84 @@ def cmd_run(args, cfg, root):
     fe = m["frontend"]
     port = str(m.get("backend", {}).get("port", 8100))
     GEN.mkdir(exist_ok=True)
-    proxy = GEN / f"proxy.{m['name']}.json"
+    proxy = GEN / f"proxy.{component_name(m, args.component)}.json"
     proxy.write_text(json.dumps({"/api": {"target": f"http://localhost:{port}", "secure": False, "changeOrigin": True}}, indent=2))
     fport = str(fe.get("port", 4300))
     print(f"Frontend: http://localhost:{fport}{fe.get('route', '')}    (API proxied to :{port})")
-    npx = shutil.which("npx") or "npx"
-    sys.exit(sh([npx, "ng", "serve", "--proxy-config", str(proxy), "--port", fport, *args.extra], root / "frontend"))
+    sys.exit(sh([npx_exe(), "ng", "serve", "--proxy-config", str(proxy), "--port", fport, *args.extra], root / "frontend"))
 
 
 # --------------------------------------------------------------------------- main
 def main():
     ap = argparse.ArgumentParser(prog="lab", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
-    sub.add_parser("list").set_defaults(fn=cmd_list)
-    sub.add_parser("doctor").set_defaults(fn=cmd_doctor)
+
+    sub.add_parser("list", help="components declared in components/*.toml")
     
-    p_init = sub.add_parser("init")
+    p_scan = sub.add_parser("scan", help="scan backend/app/modules/ to auto-discover and register components")
+    p_scan.add_argument("target", nargs="?", default="component")
+
+    p_doctor = sub.add_parser("doctor", help="check tools, dependencies and runtime services")
+    p_doctor.add_argument("--json", action="store_true", help="emit diagnostic results as JSON")
+    p_doctor.add_argument("--phase", choices=["all", "build"], default="all",
+                          help="check build prerequisites only, or include all runtime services")
+
+    p_install = sub.add_parser("install", help="install prerequisites or verify the Twins Lab environment")
+    p_install.add_argument("target", nargs="?", choices=["all"],
+                           help="install all system tools and project dependencies")
+    p_install.add_argument("--check", action="store_true", help="verify lab prerequisites without installing")
+    p_install.add_argument("--skip-backend", action="store_true")
+    p_install.add_argument("--skip-frontend", action="store_true")
+
+    p_init = sub.add_parser("init", help="initialize local fixtures, stubs, and isolated environment for a component")
     p_init.add_argument("component")
-    p_init.set_defaults(fn=cmd_init)
 
-    p_build = sub.add_parser("build")
+    p_build = sub.add_parser("build", help="build and generate a traceability manifest with Git SCM info")
     p_build.add_argument("component")
-    p_build.add_argument("--standalone", action="store_true", help="build in isolated standalone mode")
-    p_build.set_defaults(fn=cmd_build)
+    p_build.add_argument("--standalone", action="store_true")
 
-    for name, fn in (("inspect", cmd_inspect), ("test", cmd_test), ("up", cmd_up), ("down", cmd_down)):
-            p = sub.add_parser(name)
-            if name == "test":
-                p.add_argument("component", nargs="?", default="all", help="Component name or 'all' for everything")
-            else:
-                p.add_argument("component")
-                
-            if name in ("inspect", "test"):
-                p.add_argument("--side", choices=["backend", "frontend"])
-            if name == "test":
-                p.add_argument("--unit", action="store_true", help="skip integration tests (no DB needed)")
-            p.set_defaults(fn=fn)
-            
-    p = sub.add_parser("run")
-    p.add_argument("component")
-    p.add_argument("side", choices=["backend", "frontend"])
-    p.set_defaults(fn=cmd_run)
+    p_inspect = sub.add_parser("inspect", help="what the component imports from / is imported by the rest of the app")
+    p_inspect.add_argument("component")
+    p_inspect.add_argument("--side", choices=["backend", "frontend"])
 
-    args, extra = ap.parse_known_args()
-    args.extra = [e for e in extra if e != "--"]
+    p_up = sub.add_parser("up", help="start only the docker services the component needs")
+    p_up.add_argument("component")
+
+    p_down = sub.add_parser("down", help="stop only the docker services the component needs")
+    p_down.add_argument("component")
+
+    p_test = sub.add_parser("test", help="run only the component's tests")
+    p_test.add_argument("component", default="all", nargs="?")
+    p_test.add_argument("--side", choices=["backend", "frontend"])
+    p_test.add_argument("--unit", action="store_true")
+    p_test.add_argument("extra", nargs=argparse.REMAINDER)
+
+    p_run = sub.add_parser("run", help="launch the component alone")
+    p_run.add_argument("component")
+    p_run.add_argument("side", choices=["backend", "frontend"])
+    p_run.add_argument("extra", nargs=argparse.REMAINDER)
+
     cfg, root = load_cfg()
-    args.fn(args, cfg, root)
+    args = ap.parse_args()
+    
+    cmds = {
+        "list": cmd_list,
+        "scan": cmd_scan,
+        "doctor": cmd_doctor,
+        "install": cmd_install,
+        "init": cmd_init,
+        "build": cmd_build,
+        "inspect": cmd_inspect,
+        "up": cmd_up,
+        "down": cmd_down,
+        "test": cmd_test,
+        "run": cmd_run,
+    }
+    
+    if args.cmd in cmds:
+        cmds[args.cmd](args, cfg, root)
+    else:
+        ap.print_help()
 
 
 if __name__ == "__main__":

@@ -1,0 +1,7 @@
+name = "quality"
+description = "Composant découvert automatiquement par le lab scan"
+
+[backend]
+dir = "backend/app/modules/quality"
+package = "app.modules.quality"
+test_paths = ["tests/unit/quality"]
