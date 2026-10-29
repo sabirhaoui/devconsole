@@ -287,6 +287,7 @@ test_paths = ["{fe_rel_path}"]
 
     print(f"\n[SUCCESS] Scan terminé. {discovered} créé(s), {updated} mis à jour.")
     print("[+] Exécutez 'lab list' pour vérifier les côtés détectés.")
+
 def check_python_requirements(python: str, requirements: Path) -> tuple[bool, str]:
     script = """
 import sys
@@ -343,6 +344,81 @@ print("All active requirements are installed at compatible versions.")
         return False, str(exc)
     return result.returncode == 0, (result.stdout or result.stderr).strip()
 
+def cmd_ubuntu(args, cfg, root):
+    subcommand = getattr(args, "ubuntu_action", None)
+    u_cfg = cfg.get("ubuntu", {
+        "host": "51.44.213.47",
+        "port": 22,
+        "user": "ubuntu",
+        "ssh_key": "~/.ssh/assystem_key.pem",
+        "remote_db_name": "twins_db",
+        "remote_db_user": "postgres",
+        "backup_dir": "/var/backups/twins"
+    })
+
+    host = u_cfg.get("host")
+    user = u_cfg.get("user")
+    port = str(u_cfg.get("port", 22))
+    key = u_cfg.get("ssh_key")
+    db_name = u_cfg.get("remote_db_name", "twins_db")
+    db_user = u_cfg.get("remote_db_user", "postgres")
+    backup_dir = u_cfg.get("backup_dir", "/var/backups/twins")
+
+    if subcommand in ("auth", "login"):
+        target_name = getattr(args, "ubuntu_target", None)
+        if target_name and "targets" in u_cfg and target_name in u_cfg["targets"]:
+            t_cfg = u_cfg["targets"][target_name]
+            host = t_cfg.get("host", host)
+            user = t_cfg.get("user", user)
+            port = str(t_cfg.get("port", port))
+            key = t_cfg.get("ssh_key", key)
+            print(f"=== [UBUNTU] Connexion à la cible '{target_name}' ({user}@{host}:{port}) ===")
+        else:
+            print(f"=== [UBUNTU] Connexion SSH à la VM ({user}@{host}:{port}) ===")
+        
+        key_path = os.path.expanduser(key)
+        ssh_cmd = f'ssh -t -i "{key_path}" -p {port} {user}@{host}'
+        exit_code = os.system(ssh_cmd)
+        return exit_code
+
+    elif subcommand == "dump":
+        timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        dump_file = f"{backup_dir}/dump_{db_name}_{timestamp}.sql.gz"
+        print(f"=== [UBUNTU] Génération du dump direct de la base '{db_name}' ===")
+        ssh_base = ["ssh", "-i", os.path.expanduser(key), "-p", port, f"{user}@{host}"]
+        remote_cmd = f"mkdir -p {backup_dir} && pg_dump -U {db_user} -d {db_name} | gzip > {dump_file} && ls -lh {dump_file}"
+        sh(ssh_base + [remote_cmd], cwd=root)
+
+    elif subcommand == "backup":
+        timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        archive_name = f"backup_env_{timestamp}.tar.gz"
+        print(f"=== [UBUNTU] Création d'un backup global de l'espace de travail ===")
+        ssh_base = ["ssh", "-i", os.path.expanduser(key), "-p", port, f"{user}@{host}"]
+        remote_cmd = f"mkdir -p {backup_dir} && tar -czvf {backup_dir}/{archive_name} --exclude='*.log' /workspace/twins_project"
+        sh(ssh_base + [remote_cmd], cwd=root)
+
+    elif subcommand == "pipeline":
+        action = getattr(args, "pipeline_action", "status")
+        print(f"=== [UBUNTU] Gestion des Pipelines CI/CD ({action}) ===")
+        ssh_base = ["ssh", "-i", os.path.expanduser(key), "-p", port, f"{user}@{host}"]
+        if action == "run":
+            remote_cmd = "cd /workspace/twins_project && git pull && docker compose restart backend frontend"
+        else:
+            remote_cmd = "docker compose ps && docker logs --tail 50 twins_backend"
+        sh(ssh_base + [remote_cmd], cwd=root)
+
+    elif subcommand in ("history", "env"):
+        print("=== [UBUNTU] Historisation & Versions des Environnements ===")
+        ssh_base = ["ssh", "-i", os.path.expanduser(key), "-p", port, f"{user}@{host}"]
+        remote_cmd = (
+            "echo '--- GIT VERSION ---' && cd /workspace/twins_project && git log -1 --oneline && "
+            "echo '--- DOCKER IMAGES ---' && docker images --format 'table {{.Repository}}\t{{.Tag}}\t{{.ID}}\t{{.CreatedAt}}' && "
+            "echo '--- RECENT BACKUPS ---' && ls -lt " + backup_dir + " | head -n 10"
+        )
+        sh(ssh_base + [remote_cmd], cwd=root)
+
+    else:
+        print("=== [UBUNTU] Actions disponibles : auth, dump, backup, pipeline, history ===")
 
 def cmd_doctor(args, cfg, root):
     failures = 0
@@ -1080,7 +1156,6 @@ def cmd_run(args, cfg, root):
     print(f"Frontend: http://localhost:{fport}{fe.get('route', '')}    (API proxied to :{port})")
     sys.exit(sh([npx_exe(), "ng", "serve", "--proxy-config", str(proxy), "--port", fport, *args.extra], root / "frontend"))
 
-
 # --------------------------------------------------------------------------- main
 def main():
     ap = argparse.ArgumentParser(prog="lab", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -1131,9 +1206,28 @@ def main():
     p_run.add_argument("component")
     p_run.add_argument("side", choices=["backend", "frontend"])
 
+    # Subparser Ubuntu (permet à la fois 'lab ubuntu auth' et 'lab auth' directement)
+    p_ubuntu = sub.add_parser("ubuntu", help="Gestion de la VM Ubuntu, dumps, backups, pipelines")
+    ubuntu_sub = p_ubuntu.add_subparsers(dest="ubuntu_action", required=True)
+    
+    p_auth = ubuntu_sub.add_parser("auth", help="Connexion SSH à la VM")
+    p_auth.add_argument("ubuntu_target", nargs="?", default=None, help="Cible spécifique (ex: sftp.prod.assystan)")
+    
+    ubuntu_sub.add_parser("dump", help="Générer un dump de la BDD distante")
+    ubuntu_sub.add_parser("backup", help="Créer une sauvegarde complète de l'environnement")
+    
+    p_pipe = ubuntu_sub.add_parser("pipeline", help="Gérer ou lancer les pipelines")
+    p_pipe.add_argument("pipeline_action", nargs="?", default="status", choices=["status", "run"])
+    
+    ubuntu_sub.add_parser("history", help="Afficher l'historique et les versions des environnements")
+    ubuntu_sub.add_parser("env", help="Alias pour history")
+
+    # Alias direct 'auth' à la racine pour un accès plus rapide
+    p_auth_direct = sub.add_parser("auth", help="Connexion SSH directe à la VM Ubuntu")
+    p_auth_direct.add_argument("ubuntu_target", nargs="?", default=None, help="Cible spécifique (ex: sftp.prod.assystan)")
+    
     cfg, root = load_cfg()
-    # Tout ce qui suit "--" est transmis tel quel à pytest/jest/uvicorn/ng. On le sépare avant argparse :
-    # argparse.REMAINDER avalerait sinon --side/--unit placés après le nom du composant.
+    
     argv = sys.argv[1:]
     extra: list[str] = []
     if "--" in argv:
@@ -1142,6 +1236,11 @@ def main():
     args = ap.parse_args(argv)
     args.extra = extra
     
+    if args.cmd == "auth":
+        args.ubuntu_action = "auth"
+        cmd_ubuntu(args, cfg, root)
+        return
+
     cmds = {
         "list": cmd_list,
         "scan": cmd_scan,
@@ -1154,6 +1253,7 @@ def main():
         "down": cmd_down,
         "test": cmd_test,
         "run": cmd_run,
+        "ubuntu": cmd_ubuntu,
     }
     
     if args.cmd in cmds:
