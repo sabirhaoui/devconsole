@@ -4,6 +4,7 @@
 Commands
   list                          components declared in components/*.toml
   scan component                scan backend/app/modules/ to auto-discover and register components
+  ubuntu                        interact with remote ubuntu VMs (auth, dump, backup, pipeline, history)
   doctor                        check toolchain, dependencies, databases and runtime
   install --check               verify lab prerequisites without installing
   install --dashboard           generate and open the prerequisite dashboard
@@ -13,6 +14,8 @@ Commands
   inspect <comp> [--side ..]    what the component imports from / is imported by the rest of the app
   up|down <comp>                start/stop only the docker services the component needs
   test <comp> [--side ..]       run only the component's tests    (extra args after --)
+  assemble                      full-solution pipeline: scan, resolve, compile, test, package, deliver
+                                (PowerShell args after --, e.g. python lab.py assemble -- -UpTo scan)
   run <comp> backend|frontend   launch the component alone        (extra args after --)
 
 Stdlib only. Requires Python >= 3.11 (tomllib).
@@ -60,7 +63,7 @@ def load_component(name: str) -> tuple[dict, Path]:
         sys.exit(
             f"[-] Erreur : Composant '{name}' inconnu.\n"
             f"[+] Composants connus : {known}\n"
-            f"[+] Astuce : Lancez 'lab scan component' pour découvrir les modules ou 'lab list' pour afficher les composants."
+            f"[+] Astuce : Lancez 'python lab.py scan component' pour découvrir les modules ou 'python lab.py list' pour afficher les composants."
         )
     return tomllib.loads(ms[name].read_text(encoding="utf-8")), ms[name]
 
@@ -201,7 +204,7 @@ def cmd_list(args, cfg, root):
     print("=== [TWINS_LAB] Liste des Composants Déclarés ===")
     if not ms:
         print("  (aucun fichier .toml trouvé dans scripts/twins_lab/components/)\n")
-        print("  Astuce : Exécutez 'lab scan component' pour découvrir automatiquement les composants.")
+        print("  Astuce : Exécutez 'python lab.py scan component' pour découvrir automatiquement les composants.")
         return
 
     print(f"{'COMPOSANT':<20} {'CÔTÉS (SIDES)':<18} {'DESCRIPTION'}")
@@ -234,7 +237,6 @@ def cmd_scan(args, cfg, root):
             comp_name = item.name
             toml_path = comp_dir / f"{comp_name}.toml"
             
-            # Chemins de tests backend
             test_paths = []
             for test_sub in [root / "backend" / "tests" / "unit" / comp_name, root / "backend" / "tests" / "integration" / comp_name]:
                 if test_sub.is_dir():
@@ -242,7 +244,6 @@ def cmd_scan(args, cfg, root):
             if not test_paths:
                 test_paths = [f"tests/unit/{comp_name}"]
 
-            # Recherche d'un dossier frontend associé dans l'application Angular
             fe_candidates = [
                 root / "frontend" / "src" / "app" / "pages" / comp_name,
                 root / "frontend" / "src" / "app" / "features" / comp_name,
@@ -271,7 +272,6 @@ test_paths = ["{fe_rel_path}"]
                 print(f"[+] Composant créé{' avec frontend' if has_frontend else ''} : {comp_name}")
                 discovered += 1
             else:
-                # Met à jour le TOML existant si un frontend est détecté mais absent du fichier
                 content = toml_path.read_text(encoding="utf-8")
                 if has_frontend and "[frontend]" not in content:
                     content += f"""
@@ -286,7 +286,8 @@ test_paths = ["{fe_rel_path}"]
                     print(f"[=] Composant déjà à jour : {comp_name}")
 
     print(f"\n[SUCCESS] Scan terminé. {discovered} créé(s), {updated} mis à jour.")
-    print("[+] Exécutez 'lab list' pour vérifier les côtés détectés.")
+    print("[+] Exécutez 'python lab.py list' pour vérifier les côtés détectés.")
+
 
 def check_python_requirements(python: str, requirements: Path) -> tuple[bool, str]:
     script = """
@@ -343,6 +344,7 @@ print("All active requirements are installed at compatible versions.")
     except (OSError, subprocess.TimeoutExpired) as exc:
         return False, str(exc)
     return result.returncode == 0, (result.stdout or result.stderr).strip()
+
 
 def cmd_ubuntu(args, cfg, root):
     subcommand = getattr(args, "ubuntu_action", None)
@@ -420,6 +422,7 @@ def cmd_ubuntu(args, cfg, root):
     else:
         print("=== [UBUNTU] Actions disponibles : auth, dump, backup, pipeline, history ===")
 
+
 def cmd_doctor(args, cfg, root):
     failures = 0
     phase = getattr(args, "phase", "all")
@@ -471,7 +474,7 @@ def cmd_doctor(args, cfg, root):
         backend_venv = root / "backend" / ".venv"
         check("Environnement virtuel Python backend",
               (backend_venv / ("Scripts/python.exe" if os.name == "nt" else "bin/python")).is_file(),
-              f"Exécuter lab install all pour créer {backend_venv}.")
+              f"Exécuter python lab.py install all pour créer {backend_venv}.")
         requirements = root / "backend" / "requirements.txt"
         check("Manifeste backend/requirements.txt", requirements.is_file(),
               "Restaurer le manifeste des dépendances backend.")
@@ -486,7 +489,7 @@ def cmd_doctor(args, cfg, root):
         check("Cohérence des dépendances Python", pip_result is not None,
               pip_error or f"Exécuter {py} -m pip check.")
     else:
-        check("Interpréteur Python backend", False, f"Introuvable : {py}. Exécuter lab install all.")
+        check("Interpréteur Python backend", False, f"Introuvable : {py}. Exécuter python lab.py install all.")
 
     node_path = shutil.which("node")
     node_script = (
@@ -524,9 +527,9 @@ def cmd_doctor(args, cfg, root):
             timeout=180,
         )
         check("Résolution reproductible de npm ci", npm_ci is not None,
-              (f"{npm_ci_error[-1500:]}\nCorriger package.json/package-lock.json puis relancer lab install all."
+              (f"{npm_ci_error[-1500:]}\nCorriger package.json/package-lock.json puis relancer python lab.py install all."
                if npm_ci_error else
-               "npm ci --dry-run a échoué. Corriger package.json/package-lock.json puis relancer lab install all.")
+               "npm ci --dry-run a échoué. Corriger package.json/package-lock.json puis relancer python lab.py install all.")
               if npm_ci is None else "")
         npm_ls, npm_error = run_version([npm_path, "ls", "--json"], cwd=frontend, timeout=120)
         check("Dépendances npm installées dans node_modules", npm_ls is not None,
@@ -538,7 +541,7 @@ def cmd_doctor(args, cfg, root):
               "Exécuter npm ci dans le répertoire frontend.")
 
     component_files = manifests()
-    check("configuration des composants presente", bool(component_files), "executer 'lab scan component' ou ajouter un fichier components/<nom>.toml")
+    check("configuration des composants presente", bool(component_files), "executer 'python lab.py scan component' ou ajouter un fichier components/<nom>.toml")
     component_config_errors = []
     test_config_warnings = []
     for name, manifest in component_files.items():
@@ -617,7 +620,7 @@ def cmd_doctor(args, cfg, root):
         run_version([docker_path, "--version"]) if docker_path else (None, "")
     )
     check("Docker CLI (Docker Desktop)", docker_version is not None,
-          docker_error or "Installer Docker Desktop avec lab install all.")
+          docker_error or "Installer Docker Desktop avec python lab.py install all.")
     compose_version, compose_error = (
         run_version([docker_path, "compose", "version", "--short"])
         if docker_path and docker_version is not None else (None, "")
@@ -668,7 +671,7 @@ def cmd_doctor(args, cfg, root):
     postgres_major = re.search(r"PostgreSQL\)?\s+(\d+)", postgres_version or "", re.IGNORECASE)
     check("Serveur PostgreSQL natif 15 installé",
           postgres_major is not None and postgres_major.group(1) == "15",
-          postgres_version_error or "Exécuter lab install all pour installer PostgreSQL 15.",
+          postgres_version_error or "Exécuter python lab.py install all pour installer PostgreSQL 15.",
           stage="run")
 
     java_candidates = []
@@ -721,7 +724,7 @@ def cmd_doctor(args, cfg, root):
             break
     check("JDK Java 17 ou 21 (Neo4j natif)",
           java_major is not None and java_major.group(1) in {"17", "21"},
-          java_error or "Exécuter lab install all pour installer Temurin JDK 17.",
+          java_error or "Exécuter python lab.py install all pour installer Temurin JDK 17.",
           stage="run")
 
     neo4j_candidates = []
@@ -747,7 +750,7 @@ def cmd_doctor(args, cfg, root):
     )
     check("Serveur Neo4j natif 5.21 installé",
           neo4j_version is not None and re.search(r"\b5\.21(?:\.0)?\b", neo4j_version) is not None,
-          neo4j_version_error or "Exécuter lab install all pour installer Neo4j Community 5.21.0.",
+          neo4j_version_error or "Exécuter python lab.py install all pour installer Neo4j Community 5.21.0.",
           stage="run")
 
     if phase != "build":
@@ -885,7 +888,7 @@ def cmd_install(args, cfg, root):
         return
 
     if args.target != "all":
-        print("Usage: lab install --check | lab install all")
+        print("Usage: python lab.py install --check | python lab.py install all")
         raise SystemExit(2)
 
     installer = LAB / "install_needed.ps1"
@@ -1023,13 +1026,11 @@ def backend_env(m: dict) -> dict:
 
 
 def _extra_args(args) -> list[str]:
-    """Arguments passés à pytest/jest ; retire le '--' de tête laissé par argparse.REMAINDER."""
     extra = list(args.extra or [])
     return extra[1:] if extra and extra[0] == "--" else extra
 
 
 def _suite_env(cfg: dict) -> dict:
-    """Environnement de la suite complète : [backend.env] de tous les composants + [tests.env] de lab.toml."""
     env = os.environ.copy()
     for path in manifests().values():
         m = tomllib.loads(path.read_text(encoding="utf-8"))
@@ -1039,11 +1040,6 @@ def _suite_env(cfg: dict) -> dict:
 
 
 def backend_suite(cfg: dict, root: Path, unit: bool) -> tuple[list[str], list[str]]:
-    """Chemins pytest de TOUTE la suite backend (indépendants des composants scannés).
-
-    Ordre de résolution : lab.toml [tests] backend_paths, puis testpaths de
-    backend/pyproject.toml, puis "tests". Avec --unit, les dossiers integration/ sont ignorés.
-    """
     backend = root / "backend"
     paths = list(cfg.get("tests", {}).get("backend_paths", []))
     if not paths:
@@ -1063,7 +1059,6 @@ def backend_suite(cfg: dict, root: Path, unit: bool) -> tuple[list[str], list[st
 
 
 def _test_all(args, cfg, root, extra: list[str]):
-    """Une seule session pytest sur tout le backend + une seule session jest sur tout le frontend."""
     print("\n========================================================")
     print(" Executing the FULL test suite (backend + frontend)")
     print("========================================================")
@@ -1073,7 +1068,7 @@ def _test_all(args, cfg, root, extra: list[str]):
         paths, ignores = backend_suite(cfg, root, args.unit)
         if paths:
             rc = sh([python_exe(cfg), "-m", "pytest", *paths, *ignores, *extra], root / "backend", _suite_env(cfg))
-            results["backend"] = 0 if rc == 5 else rc  # 5 = aucun test collecté
+            results["backend"] = 0 if rc == 5 else rc
         else:
             print(f"  (Aucun dossier de tests backend trouvé dans {root / 'backend'})")
             results["backend"] = None
@@ -1085,7 +1080,6 @@ def _test_all(args, cfg, root, extra: list[str]):
             print(f"  (Dossier frontend introuvable : {root / 'frontend'})")
             results["frontend"] = None
 
-    # Information : composants dont le dossier de tests déclaré n'existe pas (couverts quand même ci-dessus).
     unmapped = []
     for name, path in manifests().items():
         b = tomllib.loads(path.read_text(encoding="utf-8")).get("backend", {})
@@ -1135,6 +1129,17 @@ def cmd_test(args, cfg, root):
     sys.exit(0 if rc == 5 else rc)
 
 
+def cmd_assemble(args, cfg, root):
+    """Chaîne d'assemblage de la solution complète (assembly/twins-assemble.ps1)."""
+    script = LAB / "assembly" / "twins-assemble.ps1"
+    if not script.exists():
+        assembly_dir = LAB / "assembly"
+        assembly_dir.mkdir(parents=True, exist_ok=True)
+        sys.exit(f"[-] {script} introuvable. Veuillez placer 'twins-assemble.ps1' dans {assembly_dir}.")
+    shell = shutil.which("pwsh") or shutil.which("powershell") or "powershell"
+    sys.exit(sh([shell, "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(script), "-TwinsRoot", str(root), *args.extra], LAB))
+
+
 def cmd_run(args, cfg, root):
     m, mpath = load_component(args.component)
     if args.side == "backend":
@@ -1156,15 +1161,21 @@ def cmd_run(args, cfg, root):
     print(f"Frontend: http://localhost:{fport}{fe.get('route', '')}    (API proxied to :{port})")
     sys.exit(sh([npx_exe(), "ng", "serve", "--proxy-config", str(proxy), "--port", fport, *args.extra], root / "frontend"))
 
+
 # --------------------------------------------------------------------------- main
 def main():
-    ap = argparse.ArgumentParser(prog="lab", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap = argparse.ArgumentParser(prog="python lab.py", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
 
     sub.add_parser("list", help="components declared in components/*.toml")
     
     p_scan = sub.add_parser("scan", help="scan backend/app/modules/ to auto-discover and register components")
     p_scan.add_argument("target", nargs="?", default="component")
+
+    p_ubuntu = sub.add_parser("ubuntu", help="interact with remote ubuntu VMs (auth, dump, backup, pipeline, history)")
+    p_ubuntu.add_argument("ubuntu_action", nargs="?", choices=["auth", "login", "dump", "backup", "pipeline", "history", "env"], default="auth")
+    p_ubuntu.add_argument("ubuntu_target", nargs="?", help="optional target name from lab.toml ubuntu.targets")
+    p_ubuntu.add_argument("pipeline_action", nargs="?", choices=["status", "run"], default="status")
 
     p_doctor = sub.add_parser("doctor", help="check tools, dependencies and runtime services")
     p_doctor.add_argument("--json", action="store_true", help="emit diagnostic results as JSON")
@@ -1202,48 +1213,29 @@ def main():
     p_test.add_argument("--side", choices=["backend", "frontend"])
     p_test.add_argument("--unit", action="store_true")
 
+    p_assemble = sub.add_parser("assemble", help="full-solution pipeline: scan, resolve, compile, test, package, deliver")
+    p_assemble.add_argument("extra", nargs=argparse.REMAINDER, help="extra arguments passed to PowerShell script")
+
     p_run = sub.add_parser("run", help="launch the component alone")
     p_run.add_argument("component")
     p_run.add_argument("side", choices=["backend", "frontend"])
 
-    # Subparser Ubuntu (permet à la fois 'lab ubuntu auth' et 'lab auth' directement)
-    p_ubuntu = sub.add_parser("ubuntu", help="Gestion de la VM Ubuntu, dumps, backups, pipelines")
-    ubuntu_sub = p_ubuntu.add_subparsers(dest="ubuntu_action", required=True)
-    
-    p_auth = ubuntu_sub.add_parser("auth", help="Connexion SSH à la VM")
-    p_auth.add_argument("ubuntu_target", nargs="?", default=None, help="Cible spécifique (ex: sftp.prod.assystan)")
-    
-    ubuntu_sub.add_parser("dump", help="Générer un dump de la BDD distante")
-    ubuntu_sub.add_parser("backup", help="Créer une sauvegarde complète de l'environnement")
-    
-    p_pipe = ubuntu_sub.add_parser("pipeline", help="Gérer ou lancer les pipelines")
-    p_pipe.add_argument("pipeline_action", nargs="?", default="status", choices=["status", "run"])
-    
-    ubuntu_sub.add_parser("history", help="Afficher l'historique et les versions des environnements")
-    ubuntu_sub.add_parser("env", help="Alias pour history")
-
-    # Alias direct 'auth' à la racine pour un accès plus rapide
-    p_auth_direct = sub.add_parser("auth", help="Connexion SSH directe à la VM Ubuntu")
-    p_auth_direct.add_argument("ubuntu_target", nargs="?", default=None, help="Cible spécifique (ex: sftp.prod.assystan)")
-    
     cfg, root = load_cfg()
-    
     argv = sys.argv[1:]
     extra: list[str] = []
     if "--" in argv:
         i = argv.index("--")
         argv, extra = argv[:i], argv[i + 1:]
     args = ap.parse_args(argv)
-    args.extra = extra
+    if hasattr(args, "extra") and args.extra:
+        pass
+    else:
+        args.extra = extra
     
-    if args.cmd == "auth":
-        args.ubuntu_action = "auth"
-        cmd_ubuntu(args, cfg, root)
-        return
-
     cmds = {
         "list": cmd_list,
         "scan": cmd_scan,
+        "ubuntu": cmd_ubuntu,
         "doctor": cmd_doctor,
         "install": cmd_install,
         "init": cmd_init,
@@ -1252,8 +1244,8 @@ def main():
         "up": cmd_up,
         "down": cmd_down,
         "test": cmd_test,
+        "assemble": cmd_assemble,
         "run": cmd_run,
-        "ubuntu": cmd_ubuntu,
     }
     
     if args.cmd in cmds:

@@ -1,0 +1,27 @@
+# Image backend (FastAPI). Construite dans un conteneur propre : aucune dépendance du poste n'y entre.
+ARG PYTHON_IMAGE=python:3.14-slim
+FROM ${PYTHON_IMAGE}
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
+
+WORKDIR /srv
+
+# Couche de dépendances séparée : réutilisée tant que requirements ne change pas.
+# VERIFY : si une dépendance se compile (pas de wheel pour 3.14), ajouter build-essential / libpq-dev ici.
+COPY requirements*.txt ./
+RUN pip install -r requirements.txt
+
+COPY . .
+
+ARG BUILD_VERSION=dev
+ARG GIT_SHA=unknown
+ENV TWINS_BUILD_VERSION=${BUILD_VERSION} TWINS_GIT_SHA=${GIT_SHA}
+
+RUN useradd --system --uid 10001 --no-create-home twins && chown -R twins /srv
+USER twins
+
+EXPOSE 8000
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

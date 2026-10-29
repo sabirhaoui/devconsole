@@ -1,0 +1,24 @@
+# Image frontend : build Angular dans un conteneur Node épinglé, puis service statique par nginx.
+ARG NODE_IMAGE=node:26-slim
+ARG NGINX_IMAGE=nginx:stable-alpine
+
+FROM ${NODE_IMAGE} AS build
+WORKDIR /app
+ENV CI=true NPM_CONFIG_UPDATE_NOTIFIER=false NG_CLI_ANALYTICS=false
+COPY package.json package-lock.json ./
+RUN npm ci --no-audit --no-fund
+COPY . .
+RUN npm run build
+
+FROM ${NGINX_IMAGE}
+COPY --from=build /app/dist /tmp/dist
+# Angular range le site dans dist/<projet>/browser : on retrouve le dossier qui contient index.html.
+RUN d="$(dirname "$(find /tmp/dist -name index.html | head -n 1)")" \
+    && cp -r "$d"/. /usr/share/nginx/html/ \
+    && rm -rf /tmp/dist
+COPY nginx.twins.conf /etc/nginx/conf.d/default.conf
+
+ARG BUILD_VERSION=dev
+ARG GIT_SHA=unknown
+LABEL org.opencontainers.image.version=${BUILD_VERSION} org.opencontainers.image.revision=${GIT_SHA}
+EXPOSE 80
