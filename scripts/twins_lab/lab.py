@@ -946,65 +946,117 @@ def backend_env(m: dict) -> dict:
     return env
 
 
+def _extra_args(args) -> list[str]:
+    """Arguments passés à pytest/jest ; retire le '--' de tête laissé par argparse.REMAINDER."""
+    extra = list(args.extra or [])
+    return extra[1:] if extra and extra[0] == "--" else extra
+
+
+def _suite_env(cfg: dict) -> dict:
+    """Environnement de la suite complète : [backend.env] de tous les composants + [tests.env] de lab.toml."""
+    env = os.environ.copy()
+    for path in manifests().values():
+        m = tomllib.loads(path.read_text(encoding="utf-8"))
+        env.update({k: str(v) for k, v in m.get("backend", {}).get("env", {}).items()})
+    env.update({k: str(v) for k, v in cfg.get("tests", {}).get("env", {}).items()})
+    return env
+
+
+def backend_suite(cfg: dict, root: Path, unit: bool) -> tuple[list[str], list[str]]:
+    """Chemins pytest de TOUTE la suite backend (indépendants des composants scannés).
+
+    Ordre de résolution : lab.toml [tests] backend_paths, puis testpaths de
+    backend/pyproject.toml, puis "tests". Avec --unit, les dossiers integration/ sont ignorés.
+    """
+    backend = root / "backend"
+    paths = list(cfg.get("tests", {}).get("backend_paths", []))
+    if not paths:
+        pyproject = backend / "pyproject.toml"
+        if pyproject.exists():
+            try:
+                ini = tomllib.loads(pyproject.read_text(encoding="utf-8")).get("tool", {}).get("pytest", {}).get("ini_options", {})
+                declared = ini.get("testpaths", [])
+                paths = declared.split() if isinstance(declared, str) else list(declared)
+            except tomllib.TOMLDecodeError:
+                pass
+    if not paths:
+        paths = ["tests"]
+    paths = [t for t in paths if (backend / t).exists()]
+    ignores = [f"--ignore={t}/integration" for t in paths if unit and (backend / t / "integration").is_dir()]
+    return paths, ignores
+
+
+def _test_all(args, cfg, root, extra: list[str]):
+    """Une seule session pytest sur tout le backend + une seule session jest sur tout le frontend."""
+    print("\n========================================================")
+    print(" Executing the FULL test suite (backend + frontend)")
+    print("========================================================")
+    results: dict[str, int | None] = {}
+
+    if args.side in (None, "backend"):
+        paths, ignores = backend_suite(cfg, root, args.unit)
+        if paths:
+            rc = sh([python_exe(cfg), "-m", "pytest", *paths, *ignores, *extra], root / "backend", _suite_env(cfg))
+            results["backend"] = 0 if rc == 5 else rc  # 5 = aucun test collecté
+        else:
+            print(f"  (Aucun dossier de tests backend trouvé dans {root / 'backend'})")
+            results["backend"] = None
+
+    if args.side in (None, "frontend"):
+        if (root / "frontend").is_dir():
+            results["frontend"] = sh([npx_exe(), "jest", "--passWithNoTests", *extra], root / "frontend")
+        else:
+            print(f"  (Dossier frontend introuvable : {root / 'frontend'})")
+            results["frontend"] = None
+
+    # Information : composants dont le dossier de tests déclaré n'existe pas (couverts quand même ci-dessus).
+    unmapped = []
+    for name, path in manifests().items():
+        b = tomllib.loads(path.read_text(encoding="utf-8")).get("backend", {})
+        if b and not any((root / "backend" / t).exists() for t in b.get("test_paths", [])):
+            unmapped.append(name)
+
+    print("\n========================================================")
+    print(" Test summary")
+    for side, rc in results.items():
+        label = "skipped (nothing found)" if rc is None else ("OK" if rc == 0 else f"FAILED (exit code {rc})")
+        print(f"   {side:<9} {label}")
+    if unmapped and args.side in (None, "backend"):
+        print(f" Composants sans dossier de tests dédié (inclus dans la suite globale) : {', '.join(unmapped)}")
+    print("========================================================")
+    sys.exit(next((rc for rc in results.values() if rc), 0))
+
+
 def cmd_test(args, cfg, root):
-    comps = list(manifests().keys()) if args.component == "all" else [args.component]
-    global_rc = 0
-
-    for comp_name in comps:
-        m, _ = load_component(comp_name)
-        
-        has_tests = False
-        if args.side in (None, "backend") and "backend" in m:
-            tests = m["backend"].get("test_paths", [])
-            if args.unit:
-                tests = [t for t in tests if "integration" not in t]
-            existing_tests = [t for t in tests if (root / "backend" / t).exists()]
-            if existing_tests:
-                has_tests = True
-
-        if args.side in (None, "frontend") and "frontend" in m:
-            tests = m["frontend"].get("test_paths", [])
-            if tests:
-                has_tests = True
-
-        if args.component == "all" and not has_tests:
-            continue
-
-        print(f"\n========================================================")
-        print(f" Executing tests for component: {comp_name}")
-        print(f"========================================================")
-
-        rc = 0
-        if args.side in (None, "backend") and "backend" in m:
-            tests = m["backend"].get("test_paths", [])
-            if args.unit:
-                tests = [t for t in tests if "integration" not in t]
-            existing_tests = [t for t in tests if (root / "backend" / t).exists()]
-            if existing_tests:
-                backend_root = Path(os.path.join(str(root), "backend"))
-                rc = sh([python_exe(cfg), "-m", "pytest", *existing_tests, *args.extra], backend_root, backend_env(m))
-            else:
-                print(f"  (No existing backend test paths found for {comp_name})")
-                
-        if args.side in (None, "frontend") and "frontend" in m:
-            tests = m["frontend"].get("test_paths", [])
-            if tests:
-                frontend_root = Path(os.path.join(str(root), "frontend"))
-                rc_frontend = sh([npx_exe(), "jest", *tests, *args.extra], frontend_root)
-                if rc == 0:
-                    rc = rc_frontend
-            else:
-                print(f"  (No frontend tests defined for {comp_name})")
-        
-        if global_rc == 0 and rc != 0:
-            global_rc = rc
-
+    extra = _extra_args(args)
     if args.component == "all":
-        print(f"\n========================================================")
-        print(f" Global test execution finished with exit code: {global_rc}")
-        print(f"========================================================")
-    
-    sys.exit(global_rc)
+        return _test_all(args, cfg, root, extra)
+
+    m, _ = load_component(args.component)
+    print("\n========================================================")
+    print(f" Executing tests for component: {args.component}")
+    print("========================================================")
+    rc = 0
+
+    if args.side in (None, "backend") and "backend" in m:
+        tests = m["backend"].get("test_paths", [])
+        if args.unit:
+            tests = [t for t in tests if "integration" not in t]
+        existing = [t for t in tests if (root / "backend" / t).exists()]
+        if existing:
+            rc = sh([python_exe(cfg), "-m", "pytest", *existing, *extra], root / "backend", backend_env(m))
+        else:
+            print(f"  (No existing backend test paths found for {args.component})")
+
+    if args.side in (None, "frontend") and "frontend" in m:
+        tests = m["frontend"].get("test_paths", [])
+        if tests:
+            rc_front = sh([npx_exe(), "jest", "--passWithNoTests", *tests, *extra], root / "frontend")
+            rc = rc or rc_front
+        else:
+            print(f"  (No frontend tests defined for {args.component})")
+
+    sys.exit(0 if rc == 5 else rc)
 
 
 def cmd_run(args, cfg, root):
@@ -1074,15 +1126,21 @@ def main():
     p_test.add_argument("component", default="all", nargs="?")
     p_test.add_argument("--side", choices=["backend", "frontend"])
     p_test.add_argument("--unit", action="store_true")
-    p_test.add_argument("extra", nargs=argparse.REMAINDER)
 
     p_run = sub.add_parser("run", help="launch the component alone")
     p_run.add_argument("component")
     p_run.add_argument("side", choices=["backend", "frontend"])
-    p_run.add_argument("extra", nargs=argparse.REMAINDER)
 
     cfg, root = load_cfg()
-    args = ap.parse_args()
+    # Tout ce qui suit "--" est transmis tel quel à pytest/jest/uvicorn/ng. On le sépare avant argparse :
+    # argparse.REMAINDER avalerait sinon --side/--unit placés après le nom du composant.
+    argv = sys.argv[1:]
+    extra: list[str] = []
+    if "--" in argv:
+        i = argv.index("--")
+        argv, extra = argv[:i], argv[i + 1:]
+    args = ap.parse_args(argv)
+    args.extra = extra
     
     cmds = {
         "list": cmd_list,
