@@ -2,3 +2,11 @@
 [project]
 root   = "C:/workspace/twins_project"   # override with $env:TWINS_ROOT
 # Backend commands use backend/.venv/Scripts/python.exe when present, otherwise sys.executable.
+[ubuntu]
+host = "127.0.0.1"
+port = 22
+user = "ubuntu"
+ssh_key = "~/.ssh/id_rsa"
+remote_db_name = "twins_db"
+remote_db_user = "postgres"
+backup_dir = "/var/backups/twins"
