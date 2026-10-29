@@ -98,6 +98,7 @@ function Show-DevHelp {
     Write-Host 'dev lab inspect <module>  Analyse les dependances'
     Write-Host 'dev lab test <module>     Lance les tests du composant'
     Write-Host 'dev lab run <module>      Lance un composant isole'
+    Write-Host 'dev db-dump             Télécharge un dump distant de pmis_twin en local'
     Write-Host ""
     Write-Host "Exemples :"
     Write-Host "  .\dev.ps1 status"
@@ -170,7 +171,43 @@ switch ($Command.ToLowerInvariant()) {
 
             & $pythonExe $labPy @Arguments
             exit $LASTEXITCODE
+    }
+    'db-dump' {
+        $localDir = "C:\workspace\ASSYSTAN_CONTINUOUS_DELIVERY\db\backup"
+        
+        # Correction : on remonte d'un cran si la clé est dans C:\workspace au lieu de C:\workspace\devConsole
+        $keyPath = "C:\workspace\ASSYSTEMPM_KEY_LINUX 2.pem" 
+        
+        $remoteHost = "51.44.213.47"
+        $remoteUser = "ubuntu"
+
+        Write-DevInfo "Création du dossier de backup local si besoin..."
+        if (!(Test-Path $localDir)) {
+            New-Item -ItemType Directory -Path $localDir | Out-Null
         }
+
+        Write-DevInfo "Génération du dump sur la VM distante..."
+        $timestamp = (Get-Date).ToString("yyyyMMdd_HHmmss")
+        $remoteDumpPath = "/tmp/pmis_twin_$timestamp.sql"
+        
+        $remoteCommand = "TIMESTAMP=$timestamp && docker exec -t project-twin-postgres-1 pg_dump -U project_twin -d pmis_twin > $remoteDumpPath"
+        
+        & ssh -i $keyPath -o StrictHostKeyChecking=no "$remoteUser@$remoteHost" $remoteCommand
+        
+        if ($LASTEXITCODE -eq 0) {
+            Write-DevInfo "Téléchargement du dump vers $localDir..."
+            & scp -i $keyPath -o StrictHostKeyChecking=no "$remoteUser@$remoteHost`:$remoteDumpPath" "$localDir\"
+            
+            if ($LASTEXITCODE -eq 0) {
+                Write-Host "[Succès] Dump récupéré dans $localDir" -ForegroundColor Green
+            } else {
+                Write-DevError "Erreur lors du transfert SCP."
+            }
+        } else {
+            Write-DevError "Erreur lors de la génération du dump sur la VM."
+        }
+        break
+    }
     'version' {
         Write-Host 'DevConsole 1.0.0'
         break

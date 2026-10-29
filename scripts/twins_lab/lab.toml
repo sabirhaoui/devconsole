@@ -1,6 +1,7 @@
 # twins_lab global settings
 [project]
 root   = "C:/workspace/twins_project"   # override with $env:TWINS_ROOT
+
 # Backend commands use backend/.venv/Scripts/python.exe when present, otherwise sys.executable.
 [ubuntu]
 host = "51.44.213.47"
