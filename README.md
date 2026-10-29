@@ -95,30 +95,39 @@ lab run experimentation frontend
 
 ## 🩺 Diagnostics et Prérequis Système
 
-Pour vérifier l'état de l'environnement, des dépendances Python (`requirements.txt`), des packages npm, et des services de données (PostgreSQL, Neo4j, Redis, Mailpit via Docker Compose) sans déclencher d'installation :
+Pour vérifier l'état de l'environnement, des dépendances Python (`requirements.txt`), des packages npm, des bases natives PostgreSQL/Neo4j et des services Docker Compose, sans déclencher d'installation :
 
 ```powershell
 lab install --check
 ```
 
 Le contrôle distingue les prérequis du build de ceux du run. Il vérifie
-explicitement PostgreSQL dans Docker Compose, son état de connexion et le port
-`localhost:5433`, ainsi que les autres services Twins. Pour installer les
-outils et dépendances manquants :
+explicitement PostgreSQL natif (port `5432`) et Compose (port `5433`), Neo4j
+natif (Bolt `7688`) et Compose (Bolt `7687`), ainsi que les autres services
+Twins. Pour installer les outils et dépendances manquants :
 
 ```powershell
 lab install all
 ```
 
-Le projet utilise PostgreSQL via Docker Compose : aucun serveur PostgreSQL
-Windows séparé n'est requis. Après l'installation, depuis la racine de
-`twins_project`, lancez `docker compose up --build -d`, puis `npm start` depuis
-`frontend` pour démarrer Angular. Exécutez `lab doctor` pour vérifier que les
-services sont accessibles ou ouvrez le tableau de bord avec :
+`lab install all` installe également PostgreSQL 15 natif, Java Temurin 17 et
+Neo4j Community 5.21. Neo4j natif utilise les ports 7688/7475 pour éviter les
+conflits avec Compose. L'installation ne démarre pas les bases ni les
+conteneurs. Après l'installation, depuis la racine de `twins_project`, lancez
+`docker compose up --build -d`, puis `npm start` depuis `frontend` pour démarrer
+Angular. Utilisez `lab install --dashboard` pour générer et ouvrir directement
+le tableau de bord; `lab install all --dashboard` l'ouvre après l'installation.
+Exécutez `lab doctor` pour vérifier que les services sont accessibles.
+
+La commande équivalente pour générer le dashboard manuellement reste :
 
 ```powershell
 python .\scripts\twins_lab\diagnos_dashboard.py --open
 ```
+or
+
+```powershell
+lab install all --dashboard
 
 `lab doctor --phase build` vérifie uniquement les prérequis de compilation et
 peut être lancé avant le démarrage des services.

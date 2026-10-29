@@ -3,7 +3,8 @@
     Installe tout ce qu'il faut pour travailler sur twins_project avec twins_lab.
 .DESCRIPTION
     1. Prerequis systeme via winget, uniquement s'ils manquent :
-         Python >= 3.11, Node.js LTS (npm/npx), Git, et Docker Desktop avec -InstallDocker.
+         Python >= 3.11, Node.js LTS (npm/npx), Git, Docker Desktop avec -InstallDocker,
+         et Podman avec -InstallPodman.
     2. Delegue a `lab.py install` : .venv du backend, pip install -r requirements*.txt,
        npm ci dans frontend/ si node_modules est absent, variable TWINS_ROOT.
     3. Avec -Init : `lab.py init <composant>` pour chaque composant (fixtures, stubs, .env isole).
@@ -12,6 +13,7 @@
     .\install_needed.ps1 -Check
     .\install_needed.ps1 -TwinsRoot C:\workspace\twins_project -Init
     .\install_needed.ps1 -InstallDocker
+    .\install_needed.ps1 -InstallPodman
 #>
 [CmdletBinding()]
 param(
@@ -20,6 +22,7 @@ param(
     [switch]$Force,
     [switch]$Init,
     [switch]$InstallDocker,
+    [switch]$InstallPodman,
     [switch]$SkipBackend,
     [switch]$SkipFrontend
 )
@@ -85,6 +88,14 @@ function Find-Docker {
     return $null
 }
 
+function Find-Podman {
+    $podman = Get-Command podman -ErrorAction SilentlyContinue
+    if ($podman) { return $podman.Source }
+    $default = "C:\Program Files\RedHat\Podman\podman.exe"
+    if (Test-Path -LiteralPath $default) { return $default }
+    return $null
+}
+
 function Install-WithWinget {
     param([string]$Id, [string]$Label)
     if ($Check) {
@@ -146,6 +157,38 @@ if ($docker) {
     [void](Install-WithWinget -Id "Docker.DockerDesktop" -Label "Docker Desktop")
 } else {
     Write-Warn2 "Docker Desktop absent : requis seulement pour 'lab up' et les tests d'integration (-InstallDocker pour l'installer)."
+}
+
+$podman = Find-Podman
+if ($podman) {
+    $podmanVersion = & $podman --version 2>$null
+    if ($LASTEXITCODE -eq 0) {
+        Write-Ok "Podman : $podmanVersion"
+    } else {
+        Write-Fail "Podman trouvé mais impossible à exécuter : $podman"
+        $Missing.Add("Podman")
+    }
+} elseif ($InstallPodman) {
+    Write-Warn2 "Installation de Podman demandée via winget."
+    $podmanInstalled = Install-WithWinget -Id "RedHat.Podman" -Label "Podman"
+    if (-not $Check) {
+        Update-SessionPath
+        $podman = Find-Podman
+        if ($podman) {
+            $podmanVersion = & $podman --version 2>$null
+            if ($LASTEXITCODE -eq 0) {
+                Write-Ok "Podman installé : $podmanVersion"
+            } else {
+                Write-Fail "Podman installé mais impossible à exécuter : $podman"
+                $Missing.Add("Podman")
+            }
+        } elseif ($podmanInstalled) {
+            Write-Fail "Podman installé mais introuvable dans le PATH. Rouvrez le terminal puis relancez."
+            $Missing.Add("Podman (PATH)")
+        }
+    }
+} else {
+    Write-Warn2 "Podman absent : optionnel (-InstallPodman pour l'installer)."
 }
 
 if (-not $py) {

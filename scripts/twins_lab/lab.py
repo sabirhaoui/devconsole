@@ -6,6 +6,7 @@ Commands
   scan component                scan backend/app/modules/ to auto-discover and register components
   doctor                        check toolchain, dependencies, databases and runtime
   install --check               verify lab prerequisites without installing
+  install --dashboard           generate and open the prerequisite dashboard
   install all                   install system tools and project dependencies
   init <comp>                   initialize local fixtures, stubs, and isolated environment for a component
   build <comp> [--standalone]   build and generate a traceability manifest with Git SCM info
@@ -366,7 +367,7 @@ def cmd_doctor(args, cfg, root):
         if not ok and required:
             failures += 1
 
-    def run_version(command, cwd=None, timeout=15):
+    def run_version(command, cwd=None, timeout=15, env=None):
         try:
             result = subprocess.run(
                 command,
@@ -374,6 +375,7 @@ def cmd_doctor(args, cfg, root):
                 capture_output=True,
                 text=True,
                 timeout=timeout,
+                env=env,
                 shell=os.name == "nt" and Path(command[0]).suffix.lower() in {".bat", ".cmd"},
             )
         except (OSError, subprocess.TimeoutExpired) as exc:
@@ -558,7 +560,145 @@ def cmd_doctor(args, cfg, root):
     check("Configuration Docker Compose valide", compose_config_valid,
           compose_config_error[:1000] or "Vérifier docker-compose.yml, .env et Docker Compose v2.")
 
+    postgres_candidates = [shutil.which("postgres")]
+    if os.name == "nt":
+        for program_root in (
+            os.environ.get("ProgramFiles"),
+            os.environ.get("ProgramFiles(x86)"),
+        ):
+            if program_root:
+                postgres_candidates.append(
+                    str(Path(program_root) / "PostgreSQL" / "15" / "bin" / "postgres.exe")
+                )
+    postgres_path = None
+    postgres_version = None
+    postgres_version_error = ""
+    for candidate in postgres_candidates:
+        if not candidate or not Path(candidate).is_file():
+            continue
+        candidate_version, candidate_error = run_version([candidate, "--version"])
+        if postgres_path is None:
+            postgres_path = candidate
+            postgres_version = candidate_version
+            postgres_version_error = candidate_error
+        candidate_major = re.search(
+            r"PostgreSQL\)?\s+(\d+)", candidate_version or "", re.IGNORECASE
+        )
+        if candidate_major and candidate_major.group(1) == "15":
+            postgres_path = candidate
+            postgres_version = candidate_version
+            postgres_version_error = candidate_error
+            break
+    postgres_major = re.search(r"PostgreSQL\)?\s+(\d+)", postgres_version or "", re.IGNORECASE)
+    check("Serveur PostgreSQL natif 15 installé",
+          postgres_major is not None and postgres_major.group(1) == "15",
+          postgres_version_error or "Exécuter lab install all pour installer PostgreSQL 15.",
+          stage="run")
+
+    java_candidates = []
+    java_home = os.environ.get("JAVA_HOME")
+    if java_home:
+        java_candidates.append(
+            str(Path(java_home) / "bin" / ("java.exe" if os.name == "nt" else "java"))
+        )
+    java_candidates.append(shutil.which("java"))
+    if os.name == "nt":
+        for program_root in (
+            os.environ.get("ProgramFiles"),
+            os.environ.get("ProgramFiles(x86)"),
+            os.environ.get("LOCALAPPDATA"),
+        ):
+            if not program_root:
+                continue
+            for pattern in (
+                "Eclipse Adoptium/jdk-17*/bin/java.exe",
+                "Eclipse Adoptium/jdk-21*/bin/java.exe",
+                "Programs/Eclipse Adoptium/jdk-17*/bin/java.exe",
+                "Programs/Eclipse Adoptium/jdk-21*/bin/java.exe",
+                "Java/jdk-17*/bin/java.exe",
+                "Java/jdk-21*/bin/java.exe",
+            ):
+                java_candidates.extend(
+                    str(path) for path in Path(program_root).glob(pattern)
+                )
+    java_path = None
+    java_version = None
+    java_error = ""
+    java_major = None
+    for candidate in java_candidates:
+        if not candidate or not Path(candidate).is_file():
+            continue
+        candidate_version, candidate_error = run_version([candidate, "-version"])
+        candidate_major = re.search(
+            r'version\s+"(?:1\.)?(\d+)', candidate_version or "", re.IGNORECASE
+        )
+        if java_path is None:
+            java_path = candidate
+            java_version = candidate_version
+            java_error = candidate_error
+            java_major = candidate_major
+        if candidate_major and candidate_major.group(1) in {"17", "21"}:
+            java_path = candidate
+            java_version = candidate_version
+            java_error = candidate_error
+            java_major = candidate_major
+            break
+    check("JDK Java 17 ou 21 (Neo4j natif)",
+          java_major is not None and java_major.group(1) in {"17", "21"},
+          java_error or "Exécuter lab install all pour installer Temurin JDK 17.",
+          stage="run")
+
+    neo4j_candidates = []
+    neo4j_home = os.environ.get("NEO4J_HOME")
+    if neo4j_home:
+        neo4j_candidates.append(Path(neo4j_home) / "bin" / ("neo4j.bat" if os.name == "nt" else "neo4j"))
+    if os.name == "nt" and os.environ.get("LOCALAPPDATA"):
+        neo4j_candidates.append(
+            Path(os.environ["LOCALAPPDATA"]) / "Programs" / "Neo4j" /
+            "neo4j-community-5.21.0" / "bin" / "neo4j.bat"
+        )
+    neo4j_path = next((candidate for candidate in neo4j_candidates if candidate.is_file()), None)
+    neo4j_admin = (
+        neo4j_path.with_name("neo4j-admin.bat" if os.name == "nt" else "neo4j-admin")
+        if neo4j_path else None
+    )
+    neo4j_env = os.environ.copy()
+    if java_path and java_major and java_major.group(1) in {"17", "21"}:
+        neo4j_env["JAVA_HOME"] = str(Path(java_path).parent.parent)
+    neo4j_version, neo4j_version_error = (
+        run_version([str(neo4j_admin), "--version"], env=neo4j_env)
+        if neo4j_admin else (None, "")
+    )
+    check("Serveur Neo4j natif 5.21 installé",
+          neo4j_version is not None and re.search(r"\b5\.21(?:\.0)?\b", neo4j_version) is not None,
+          neo4j_version_error or "Exécuter lab install all pour installer Neo4j Community 5.21.0.",
+          stage="run")
+
     if phase != "build":
+        pg_isready = (
+            Path(postgres_path).with_name("pg_isready.exe" if os.name == "nt" else "pg_isready")
+            if postgres_path else None
+        )
+        native_pg_ready, native_pg_error = (
+            run_version([str(pg_isready), "-h", "127.0.0.1", "-p", "5432"])
+            if pg_isready and pg_isready.is_file() else (None, "")
+        )
+        check("PostgreSQL natif prêt sur localhost:5432 (pg_isready)",
+              native_pg_ready is not None,
+              native_pg_error or "Démarrer le service PostgreSQL 15 depuis Services Windows.",
+              stage="run")
+
+        for label, port, action in (
+            ("Neo4j natif Bolt accessible sur localhost:7688", 7688,
+             "Démarrer Neo4j : lancer bin\\neo4j.bat console dans son répertoire d'installation."),
+        ):
+            try:
+                with socket.create_connection(("127.0.0.1", port), timeout=1.5):
+                    available = True
+            except OSError:
+                available = False
+            check(label, available, f"Vérifier le service natif et le port {port} ; action : {action}.", stage="run")
+
         docker_result, docker_error = (
             run_version([docker_path, "info", "--format", "{{.ServerVersion}}"])
             if docker_path and compose_version is not None else (None, "")
@@ -657,6 +797,13 @@ def cmd_doctor(args, cfg, root):
 
 
 def cmd_install(args, cfg, root):
+    dashboard = LAB / "diagnos_dashboard.py"
+    if args.dashboard and (args.target != "all" or args.check):
+        if not dashboard.is_file():
+            print(f"[FAIL] Script de diagnostic introuvable : {dashboard}")
+            raise SystemExit(2)
+        raise SystemExit(subprocess.call([sys.executable, str(dashboard), "--open"], cwd=LAB))
+
     if args.check:
         cmd_doctor(args, cfg, root)
         return
@@ -675,13 +822,20 @@ def cmd_install(args, cfg, root):
         raise SystemExit(2)
     command = [
         powershell, "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(installer),
-        "-TwinsRoot", str(root), "-InstallDocker",
+        "-TwinsRoot", str(root), "-InstallDocker", "-InstallDevTools",
     ]
     if args.skip_backend:
         command.append("-SkipBackend")
     if args.skip_frontend:
         command.append("-SkipFrontend")
-    raise SystemExit(subprocess.call(command, cwd=LAB))
+    install_result = subprocess.call(command, cwd=LAB)
+    if args.dashboard:
+        if not dashboard.is_file():
+            print(f"[FAIL] Script de diagnostic introuvable : {dashboard}")
+            raise SystemExit(2)
+        dashboard_result = subprocess.call([sys.executable, str(dashboard), "--open"], cwd=LAB)
+        raise SystemExit(install_result or dashboard_result)
+    raise SystemExit(install_result)
 
 
 def cmd_init(args, cfg, root):
@@ -894,6 +1048,8 @@ def main():
     p_install.add_argument("target", nargs="?", choices=["all"],
                            help="install all system tools and project dependencies")
     p_install.add_argument("--check", action="store_true", help="verify lab prerequisites without installing")
+    p_install.add_argument("--dashboard", "--dahsboard", dest="dashboard", action="store_true",
+                           help="generate and open the prerequisite dashboard")
     p_install.add_argument("--skip-backend", action="store_true")
     p_install.add_argument("--skip-frontend", action="store_true")
 
