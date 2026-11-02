@@ -1,0 +1,7 @@
+# Les scripts PowerShell restent en CRLF (Windows PowerShell 5.1) ; tout ce qui part dans un conteneur reste en LF.
+*.ps1                text eol=crlf
+*.psd1               text eol=crlf
+Dockerfile*          text eol=lf
+*.dockerignore       text eol=lf
+*.yml                text eol=lf
+*.conf               text eol=lf

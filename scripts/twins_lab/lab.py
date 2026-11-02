@@ -4,6 +4,7 @@
 Commands
   list                          components declared in components/*.toml
   scan component                scan backend/app/modules/ to auto-discover and register components
+  ubuntu                        interact with remote ubuntu VMs (auth, dump, backup, pipeline, history)
   doctor                        check toolchain, dependencies, databases and runtime
   install --check               verify lab prerequisites without installing
   install --dashboard           generate and open the prerequisite dashboard
@@ -13,7 +14,10 @@ Commands
   inspect <comp> [--side ..]    what the component imports from / is imported by the rest of the app
   up|down <comp>                start/stop only the docker services the component needs
   test <comp> [--side ..]       run only the component's tests    (extra args after --)
+  assemble                      full-solution pipeline: scan, resolve, compile, test, package, deliver
+                                (PowerShell args after --, e.g. python lab.py project_twin assemble -- -UpTo scan)
   run <comp> backend|frontend   launch the component alone        (extra args after --)
+  run all [--engine podman]     launch the local full project after build
 
 Stdlib only. Requires Python >= 3.11 (tomllib).
 """
@@ -32,6 +36,11 @@ import tomllib
 from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
+
+import subprocess
+import sys
+from pathlib import Path
+
 
 LAB = Path(__file__).resolve().parent
 GEN = LAB / ".generated"
@@ -60,7 +69,7 @@ def load_component(name: str) -> tuple[dict, Path]:
         sys.exit(
             f"[-] Erreur : Composant '{name}' inconnu.\n"
             f"[+] Composants connus : {known}\n"
-            f"[+] Astuce : Lancez 'lab scan component' pour découvrir les modules ou 'lab list' pour afficher les composants."
+            f"[+] Astuce : Lancez 'python lab.py project_twin scan component' pour découvrir les modules ou 'python lab.py project_twin list' pour afficher les composants."
         )
     return tomllib.loads(ms[name].read_text(encoding="utf-8")), ms[name]
 
@@ -201,7 +210,7 @@ def cmd_list(args, cfg, root):
     print("=== [TWINS_LAB] Liste des Composants Déclarés ===")
     if not ms:
         print("  (aucun fichier .toml trouvé dans scripts/twins_lab/components/)\n")
-        print("  Astuce : Exécutez 'lab scan component' pour découvrir automatiquement les composants.")
+        print("  Astuce : Exécutez 'python lab.py project_twin scan component' pour découvrir automatiquement les composants.")
         return
 
     print(f"{'COMPOSANT':<20} {'CÔTÉS (SIDES)':<18} {'DESCRIPTION'}")
@@ -233,8 +242,7 @@ def cmd_scan(args, cfg, root):
         if item.is_dir() and not item.name.startswith("_"):
             comp_name = item.name
             toml_path = comp_dir / f"{comp_name}.toml"
-            
-            # Chemins de tests backend
+
             test_paths = []
             for test_sub in [root / "backend" / "tests" / "unit" / comp_name, root / "backend" / "tests" / "integration" / comp_name]:
                 if test_sub.is_dir():
@@ -242,7 +250,6 @@ def cmd_scan(args, cfg, root):
             if not test_paths:
                 test_paths = [f"tests/unit/{comp_name}"]
 
-            # Recherche d'un dossier frontend associé dans l'application Angular
             fe_candidates = [
                 root / "frontend" / "src" / "app" / "pages" / comp_name,
                 root / "frontend" / "src" / "app" / "features" / comp_name,
@@ -254,7 +261,7 @@ def cmd_scan(args, cfg, root):
 
             if not toml_path.exists():
                 toml_content = f"""name = "{comp_name}"
-description = "Composant découvert automatiquement par le lab scan"
+description = "Composant découvert automatiquement par le lab project_twin scan"
 
 [backend]
 dir = "backend/app/modules/{comp_name}"
@@ -271,7 +278,6 @@ test_paths = ["{fe_rel_path}"]
                 print(f"[+] Composant créé{' avec frontend' if has_frontend else ''} : {comp_name}")
                 discovered += 1
             else:
-                # Met à jour le TOML existant si un frontend est détecté mais absent du fichier
                 content = toml_path.read_text(encoding="utf-8")
                 if has_frontend and "[frontend]" not in content:
                     content += f"""
@@ -286,7 +292,9 @@ test_paths = ["{fe_rel_path}"]
                     print(f"[=] Composant déjà à jour : {comp_name}")
 
     print(f"\n[SUCCESS] Scan terminé. {discovered} créé(s), {updated} mis à jour.")
-    print("[+] Exécutez 'lab list' pour vérifier les côtés détectés.")
+    print("[+] Exécutez 'python lab.py project_twin list' pour vérifier les côtés détectés.")
+
+
 def check_python_requirements(python: str, requirements: Path) -> tuple[bool, str]:
     script = """
 import sys
@@ -344,6 +352,86 @@ print("All active requirements are installed at compatible versions.")
     return result.returncode == 0, (result.stdout or result.stderr).strip()
 
 
+def cmd_ubuntu(args, cfg, root):
+    if args.ubuntu_action == "fetch-db":
+        from database_sync import fetch_databases
+        return fetch_databases(args, cfg, LAB)
+    subcommand = getattr(args, "ubuntu_action", None)
+    u_cfg = cfg.get("ubuntu", {
+        "host": "51.44.213.47",
+        "port": 22,
+        "user": "ubuntu",
+        "ssh_key": "~/.ssh/assystem_key.pem",
+        "remote_db_name": "twins_db",
+        "remote_db_user": "postgres",
+        "backup_dir": "/var/backups/twins"
+    })
+
+    host = u_cfg.get("host")
+    user = u_cfg.get("user")
+    port = str(u_cfg.get("port", 22))
+    key = u_cfg.get("ssh_key")
+    db_name = u_cfg.get("remote_db_name", "twins_db")
+    db_user = u_cfg.get("remote_db_user", "postgres")
+    backup_dir = u_cfg.get("backup_dir", "/var/backups/twins")
+
+    if subcommand in ("auth", "login"):
+        target_name = getattr(args, "ubuntu_target", None)
+        if target_name and "targets" in u_cfg and target_name in u_cfg["targets"]:
+            t_cfg = u_cfg["targets"][target_name]
+            host = t_cfg.get("host", host)
+            user = t_cfg.get("user", user)
+            port = str(t_cfg.get("port", port))
+            key = t_cfg.get("ssh_key", key)
+            print(f"=== [UBUNTU] Connexion à la cible '{target_name}' ({user}@{host}:{port}) ===")
+        else:
+            print(f"=== [UBUNTU] Connexion SSH à la VM ({user}@{host}:{port}) ===")
+
+        key_path = os.path.expanduser(key)
+        ssh_cmd = f'ssh -t -i "{key_path}" -p {port} {user}@{host}'
+        exit_code = os.system(ssh_cmd)
+        return exit_code
+
+    elif subcommand == "dump":
+        timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        dump_file = f"{backup_dir}/dump_{db_name}_{timestamp}.sql.gz"
+        print(f"=== [UBUNTU] Génération du dump direct de la base '{db_name}' ===")
+        ssh_base = ["ssh", "-i", os.path.expanduser(key), "-p", port, f"{user}@{host}"]
+        remote_cmd = f"mkdir -p {backup_dir} && pg_dump -U {db_user} -d {db_name} | gzip > {dump_file} && ls -lh {dump_file}"
+        sh(ssh_base + [remote_cmd], cwd=root)
+
+    elif subcommand == "backup":
+        timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        archive_name = f"backup_env_{timestamp}.tar.gz"
+        print(f"=== [UBUNTU] Création d'un backup global de l'espace de travail ===")
+        ssh_base = ["ssh", "-i", os.path.expanduser(key), "-p", port, f"{user}@{host}"]
+        remote_cmd = f"mkdir -p {backup_dir} && tar -czvf {backup_dir}/{archive_name} --exclude='*.log' /workspace/twins_project"
+        sh(ssh_base + [remote_cmd], cwd=root)
+
+    elif subcommand == "pipeline":
+        action = getattr(args, "pipeline_action", "status")
+        print(f"=== [UBUNTU] Gestion des Pipelines CI/CD ({action}) ===")
+        ssh_base = ["ssh", "-i", os.path.expanduser(key), "-p", port, f"{user}@{host}"]
+        if action == "run":
+            remote_cmd = "cd /workspace/twins_project && git pull && docker compose restart backend frontend"
+        else:
+            remote_cmd = "docker compose ps && docker logs --tail 50 twins_backend"
+        sh(ssh_base + [remote_cmd], cwd=root)
+
+    elif subcommand in ("history", "env"):
+        print("=== [UBUNTU] Historisation & Versions des Environnements ===")
+        ssh_base = ["ssh", "-i", os.path.expanduser(key), "-p", port, f"{user}@{host}"]
+        remote_cmd = (
+            "echo '--- GIT VERSION ---' && cd /workspace/twins_project && git log -1 --oneline && "
+            "echo '--- DOCKER IMAGES ---' && docker images --format 'table {{.Repository}}\t{{.Tag}}\t{{.ID}}\t{{.CreatedAt}}' && "
+            "echo '--- RECENT BACKUPS ---' && ls -lt " + backup_dir + " | head -n 10"
+        )
+        sh(ssh_base + [remote_cmd], cwd=root)
+
+    else:
+        print("=== [UBUNTU] Actions disponibles : auth, dump, backup, pipeline, history ===")
+
+
 def cmd_doctor(args, cfg, root):
     failures = 0
     phase = getattr(args, "phase", "all")
@@ -395,7 +483,7 @@ def cmd_doctor(args, cfg, root):
         backend_venv = root / "backend" / ".venv"
         check("Environnement virtuel Python backend",
               (backend_venv / ("Scripts/python.exe" if os.name == "nt" else "bin/python")).is_file(),
-              f"Exécuter lab install all pour créer {backend_venv}.")
+              f"Exécuter python lab.py project_twin install all pour créer {backend_venv}.")
         requirements = root / "backend" / "requirements.txt"
         check("Manifeste backend/requirements.txt", requirements.is_file(),
               "Restaurer le manifeste des dépendances backend.")
@@ -410,7 +498,7 @@ def cmd_doctor(args, cfg, root):
         check("Cohérence des dépendances Python", pip_result is not None,
               pip_error or f"Exécuter {py} -m pip check.")
     else:
-        check("Interpréteur Python backend", False, f"Introuvable : {py}. Exécuter lab install all.")
+        check("Interpréteur Python backend", False, f"Introuvable : {py}. Exécuter python lab.py project_twin install all.")
 
     node_path = shutil.which("node")
     node_script = (
@@ -448,9 +536,9 @@ def cmd_doctor(args, cfg, root):
             timeout=180,
         )
         check("Résolution reproductible de npm ci", npm_ci is not None,
-              (f"{npm_ci_error[-1500:]}\nCorriger package.json/package-lock.json puis relancer lab install all."
+              (f"{npm_ci_error[-1500:]}\nCorriger package.json/package-lock.json puis relancer python lab.py project_twin install all."
                if npm_ci_error else
-               "npm ci --dry-run a échoué. Corriger package.json/package-lock.json puis relancer lab install all.")
+               "npm ci --dry-run a échoué. Corriger package.json/package-lock.json puis relancer python lab.py project_twin install all.")
               if npm_ci is None else "")
         npm_ls, npm_error = run_version([npm_path, "ls", "--json"], cwd=frontend, timeout=120)
         check("Dépendances npm installées dans node_modules", npm_ls is not None,
@@ -462,7 +550,7 @@ def cmd_doctor(args, cfg, root):
               "Exécuter npm ci dans le répertoire frontend.")
 
     component_files = manifests()
-    check("configuration des composants presente", bool(component_files), "executer 'lab scan component' ou ajouter un fichier components/<nom>.toml")
+    check("configuration des composants presente", bool(component_files), "executer 'python lab.py project_twin scan component' ou ajouter un fichier components/<nom>.toml")
     component_config_errors = []
     test_config_warnings = []
     for name, manifest in component_files.items():
@@ -541,7 +629,7 @@ def cmd_doctor(args, cfg, root):
         run_version([docker_path, "--version"]) if docker_path else (None, "")
     )
     check("Docker CLI (Docker Desktop)", docker_version is not None,
-          docker_error or "Installer Docker Desktop avec lab install all.")
+          docker_error or "Installer Docker Desktop avec python lab.py project_twin install all.")
     compose_version, compose_error = (
         run_version([docker_path, "compose", "version", "--short"])
         if docker_path and docker_version is not None else (None, "")
@@ -592,7 +680,7 @@ def cmd_doctor(args, cfg, root):
     postgres_major = re.search(r"PostgreSQL\)?\s+(\d+)", postgres_version or "", re.IGNORECASE)
     check("Serveur PostgreSQL natif 15 installé",
           postgres_major is not None and postgres_major.group(1) == "15",
-          postgres_version_error or "Exécuter lab install all pour installer PostgreSQL 15.",
+          postgres_version_error or "Exécuter python lab.py project_twin install all pour installer PostgreSQL 15.",
           stage="run")
 
     java_candidates = []
@@ -645,7 +733,7 @@ def cmd_doctor(args, cfg, root):
             break
     check("JDK Java 17 ou 21 (Neo4j natif)",
           java_major is not None and java_major.group(1) in {"17", "21"},
-          java_error or "Exécuter lab install all pour installer Temurin JDK 17.",
+          java_error or "Exécuter python lab.py project_twin install all pour installer Temurin JDK 17.",
           stage="run")
 
     neo4j_candidates = []
@@ -671,7 +759,7 @@ def cmd_doctor(args, cfg, root):
     )
     check("Serveur Neo4j natif 5.21 installé",
           neo4j_version is not None and re.search(r"\b5\.21(?:\.0)?\b", neo4j_version) is not None,
-          neo4j_version_error or "Exécuter lab install all pour installer Neo4j Community 5.21.0.",
+          neo4j_version_error or "Exécuter python lab.py project_twin install all pour installer Neo4j Community 5.21.0.",
           stage="run")
 
     if phase != "build":
@@ -809,7 +897,7 @@ def cmd_install(args, cfg, root):
         return
 
     if args.target != "all":
-        print("Usage: lab install --check | lab install all")
+        print("Usage: python lab.py project_twin install --check | python lab.py project_twin install all")
         raise SystemExit(2)
 
     installer = LAB / "install_needed.ps1"
@@ -845,18 +933,18 @@ def cmd_init(args, cfg, root):
     mod_dir.mkdir(parents=True, exist_ok=True)
     (mod_dir / "fixtures").mkdir(exist_ok=True)
     (mod_dir / "mocks").mkdir(exist_ok=True)
-    
+
     fix_file = mod_dir / "fixtures" / "default.json"
     if not fix_file.exists():
         fix_file.write_text(json.dumps({"module": args.component, "status": "synthetic", "items": []}, indent=2), encoding="utf-8")
-    
+
     print(f"[SUCCESS] Component '{args.component}' initialized successfully at {mod_dir}")
 
 
 def cmd_build(args, cfg, root):
     m, mpath = load_component(args.component)
     print(f"[LAB] Building traceability manifest for component '{args.component}'...")
-    
+
     backend_dir = root / "backend"
     module_backend_dir = backend_dir / m.get("backend", {}).get("dir", f"app/modules/{args.component}")
     if module_backend_dir.is_dir():
@@ -881,7 +969,7 @@ def cmd_build(args, cfg, root):
     timestamp_utc = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     short_sha = commit_sha1[:7] if commit_sha1 != "unknown" else "0000000"
     build_id = f"{args.component}-standalone-{timestamp_utc}-{short_sha}"
-    
+
     BUILDS_DIR.mkdir(parents=True, exist_ok=True)
     build_dir = BUILDS_DIR / build_id
     build_dir.mkdir(parents=True, exist_ok=True)
@@ -902,7 +990,7 @@ def cmd_build(args, cfg, root):
 
     manifest_file = build_dir / "manifest.json"
     manifest_file.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
-    
+
     root_manifest_copy = BUILDS_DIR / f"{args.component}-build-manifest.json"
     root_manifest_copy.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
 
@@ -947,13 +1035,11 @@ def backend_env(m: dict) -> dict:
 
 
 def _extra_args(args) -> list[str]:
-    """Arguments passés à pytest/jest ; retire le '--' de tête laissé par argparse.REMAINDER."""
     extra = list(args.extra or [])
     return extra[1:] if extra and extra[0] == "--" else extra
 
 
 def _suite_env(cfg: dict) -> dict:
-    """Environnement de la suite complète : [backend.env] de tous les composants + [tests.env] de lab.toml."""
     env = os.environ.copy()
     for path in manifests().values():
         m = tomllib.loads(path.read_text(encoding="utf-8"))
@@ -963,11 +1049,6 @@ def _suite_env(cfg: dict) -> dict:
 
 
 def backend_suite(cfg: dict, root: Path, unit: bool) -> tuple[list[str], list[str]]:
-    """Chemins pytest de TOUTE la suite backend (indépendants des composants scannés).
-
-    Ordre de résolution : lab.toml [tests] backend_paths, puis testpaths de
-    backend/pyproject.toml, puis "tests". Avec --unit, les dossiers integration/ sont ignorés.
-    """
     backend = root / "backend"
     paths = list(cfg.get("tests", {}).get("backend_paths", []))
     if not paths:
@@ -987,7 +1068,6 @@ def backend_suite(cfg: dict, root: Path, unit: bool) -> tuple[list[str], list[st
 
 
 def _test_all(args, cfg, root, extra: list[str]):
-    """Une seule session pytest sur tout le backend + une seule session jest sur tout le frontend."""
     print("\n========================================================")
     print(" Executing the FULL test suite (backend + frontend)")
     print("========================================================")
@@ -997,7 +1077,7 @@ def _test_all(args, cfg, root, extra: list[str]):
         paths, ignores = backend_suite(cfg, root, args.unit)
         if paths:
             rc = sh([python_exe(cfg), "-m", "pytest", *paths, *ignores, *extra], root / "backend", _suite_env(cfg))
-            results["backend"] = 0 if rc == 5 else rc  # 5 = aucun test collecté
+            results["backend"] = 0 if rc == 5 else rc
         else:
             print(f"  (Aucun dossier de tests backend trouvé dans {root / 'backend'})")
             results["backend"] = None
@@ -1009,7 +1089,6 @@ def _test_all(args, cfg, root, extra: list[str]):
             print(f"  (Dossier frontend introuvable : {root / 'frontend'})")
             results["frontend"] = None
 
-    # Information : composants dont le dossier de tests déclaré n'existe pas (couverts quand même ci-dessus).
     unmapped = []
     for name, path in manifests().items():
         b = tomllib.loads(path.read_text(encoding="utf-8")).get("backend", {})
@@ -1059,7 +1138,15 @@ def cmd_test(args, cfg, root):
     sys.exit(0 if rc == 5 else rc)
 
 
+
 def cmd_run(args, cfg, root):
+    if args.component == "all":
+        if args.side:
+            raise SystemExit("Utilisez 'lab project_twin run all' sans backend/frontend.")
+        from project_run import run_project
+        return run_project(args, root, GEN)
+    if not args.side:
+        raise SystemExit("Précisez backend ou frontend pour lancer un composant isolé.")
     m, mpath = load_component(args.component)
     if args.side == "backend":
         b = m["backend"]
@@ -1070,7 +1157,7 @@ def cmd_run(args, cfg, root):
         print(f"Lab API (Isolated): http://localhost:{port}/docs    routes: /__lab/routes")
         sys.exit(sh([python_exe(cfg), "-m", "uvicorn", "lab_harness:app", "--port", port, "--reload",
                     "--reload-dir", str(root / "backend" / "app"), "--reload-dir", str(LAB), *args.extra], root / "backend", env))
-    
+
     fe = m["frontend"]
     port = str(m.get("backend", {}).get("port", 8100))
     GEN.mkdir(exist_ok=True)
@@ -1080,16 +1167,106 @@ def cmd_run(args, cfg, root):
     print(f"Frontend: http://localhost:{fport}{fe.get('route', '')}    (API proxied to :{port})")
     sys.exit(sh([npx_exe(), "ng", "serve", "--proxy-config", str(proxy), "--port", fport, *args.extra], root / "frontend"))
 
+# --------------------------------------------------------------------------- cmd_assemble
+from pathlib import Path
+import subprocess
+import sys
+from pathlib import Path
+import subprocess
+import sys
+
+from pathlib import Path
+import subprocess
+import sys
+
+def cmd_assemble(args, cfg, root):
+    """Exécute la chaîne d'assemblage ou prépare le .env local avant de lancer Podman/Docker Compose."""
+    twins_root = str(root)
+    if args.extra and "build" in args.extra:
+        print("=== Préparation de l'environnement et démarrage de Podman ===")
+
+        # 1. S'assurer que la machine Podman est démarrée
+        print("Vérification / Démarrage de la machine Podman...")
+        subprocess.run(["podman", "machine", "start"], capture_output=True)
+
+        # 2. Préserver la configuration locale et créer uniquement les valeurs absentes.
+        env_path = Path(twins_root) / ".env"
+        if not env_path.exists():
+            import secrets
+            from urllib.parse import quote
+
+            postgres_password = secrets.token_urlsafe(32)
+            neo4j_password = secrets.token_urlsafe(32)
+            jwt_secret = secrets.token_urlsafe(48)
+            api_key = os.environ.get("OPENAI_API_KEY", "")
+            if "\n" in api_key or "\r" in api_key:
+                raise SystemExit("OPENAI_API_KEY doit tenir sur une seule ligne.")
+            env_content = f"""# PROJECT TWIN - Local Assembly Environment
+POSTGRES_USER=project_twin
+POSTGRES_PASSWORD={postgres_password}
+POSTGRES_DB=pmis_twin
+NEO4J_USER=neo4j
+NEO4J_PASSWORD={neo4j_password}
+JWT_SECRET_KEY={jwt_secret}
+JWT_ALGORITHM=HS256
+JWT_ACCESS_TOKEN_EXPIRE_MINUTES=60
+JWT_REFRESH_TOKEN_EXPIRE_DAYS=14
+LLM_PROVIDER=openai
+OPENAI_API_KEY={api_key}
+OPENAI_MODEL=gpt-5.6-luna
+OPENAI_BASE_URL=https://api.openai.com/v1
+LLM_TEMPERATURE=0.2
+LLM_MAX_TOKENS=1024
+EMAIL_PROVIDER=console
+MAIL_FROM=twin-dev@localhost
+MAIL_APP_NAME=Project Twin
+FRONTEND_BASE_URL=http://localhost:3000
+SMTP_HOST=localhost
+SMTP_PORT=1025
+APP_ENV=development
+APP_DEBUG=true
+CORS_ORIGINS=http://localhost:3000,http://localhost:4200
+POSTGRES_HOST=postgres
+IMAGE_TAG=local-build-dev
+DATABASE_URL=postgresql://project_twin:{quote(postgres_password, safe="")}@postgres:5432/pmis_twin
+TWINS_HTTP_PORT=3000
+"""
+            with env_path.open("x", encoding="utf-8") as stream:
+                stream.write(env_content)
+            print(f"-> Fichier .env créé dans {env_path}")
+        else:
+            print(f"-> Configuration existante conservée : {env_path}")
+
+        # 3. Lancement de Podman Compose
+        compose_cmd = ["podman", "compose", "up", "--build", "-d"]
+        print(f"Exécution : {' '.join(compose_cmd)} (dans {twins_root})")
+
+        result = subprocess.run(compose_cmd, cwd=twins_root)
+        sys.exit(result.returncode)
 
 # --------------------------------------------------------------------------- main
 def main():
     ap = argparse.ArgumentParser(prog="lab", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    sub = ap.add_subparsers(dest="cmd", required=True)
+    projects = ap.add_subparsers(dest="project", required=True)
+    project = projects.add_parser(
+        "project_twin", help="administrer le projet Twins",
+        description="Commandes du projet Twins : lab project_twin <action> [arguments]",
+    )
+    sub = project.add_subparsers(dest="cmd", required=True)
 
     sub.add_parser("list", help="components declared in components/*.toml")
-    
+
     p_scan = sub.add_parser("scan", help="scan backend/app/modules/ to auto-discover and register components")
     p_scan.add_argument("target", nargs="?", default="component")
+
+    p_ubuntu = sub.add_parser("ubuntu", help="interact with remote ubuntu VMs (auth, dump, backup, pipeline, history)")
+    p_ubuntu.add_argument("ubuntu_action", nargs="?", choices=["auth", "login", "dump", "fetch-db", "backup", "pipeline", "history", "env"], default="auth")
+    p_ubuntu.add_argument("ubuntu_target", nargs="?", help="optional target name from lab.toml ubuntu.targets")
+    p_ubuntu.add_argument("pipeline_action", nargs="?", choices=["status", "run"], default="status")
+    p_ubuntu.add_argument("--output", help="new local snapshot directory (fetch-db)")
+    p_ubuntu.add_argument("--neo4j-dump", help="existing remote Neo4j dump path; no remote service stop")
+    p_ubuntu.add_argument("--stop-remote-neo4j", action="store_true", help="allow temporary remote Compose Neo4j stop for dump")
+    p_ubuntu.add_argument("--restore", action="store_true", help="restore into new dedicated local Docker volumes")
 
     p_doctor = sub.add_parser("doctor", help="check tools, dependencies and runtime services")
     p_doctor.add_argument("--json", action="store_true", help="emit diagnostic results as JSON")
@@ -1127,24 +1304,28 @@ def main():
     p_test.add_argument("--side", choices=["backend", "frontend"])
     p_test.add_argument("--unit", action="store_true")
 
-    p_run = sub.add_parser("run", help="launch the component alone")
+    p_assemble = sub.add_parser("assemble", help="full-solution pipeline: scan, resolve, compile, test, package, deliver")
+    p_assemble.add_argument("extra", nargs=argparse.REMAINDER, help="extra arguments passed to PowerShell script")
+
+    p_run = sub.add_parser("run", help="launch a component or the complete local project with 'run all'")
     p_run.add_argument("component")
-    p_run.add_argument("side", choices=["backend", "frontend"])
+    p_run.add_argument("side", nargs="?", choices=["backend", "frontend"])
+    p_run.add_argument("--engine", choices=["podman", "docker"], default="podman", help="container engine for run all (same as build)")
+    p_run.add_argument("--action", choices=["up", "stop", "status"], default="up", help="run all lifecycle action")
+    p_run.add_argument("--port", type=int, default=4200, help="run all Angular port (default: 4200)")
 
     cfg, root = load_cfg()
-    # Tout ce qui suit "--" est transmis tel quel à pytest/jest/uvicorn/ng. On le sépare avant argparse :
-    # argparse.REMAINDER avalerait sinon --side/--unit placés après le nom du composant.
-    argv = sys.argv[1:]
-    extra: list[str] = []
-    if "--" in argv:
-        i = argv.index("--")
-        argv, extra = argv[:i], argv[i + 1:]
-    args = ap.parse_args(argv)
-    args.extra = extra
-    
+
+    args = ap.parse_args(sys.argv[1:])
+    if not hasattr(args, "extra"):
+        args.extra = []
+    elif args.cmd == "assemble" and args.extra[:1] == ["--"]:
+        args.extra = args.extra[1:]
+
     cmds = {
         "list": cmd_list,
         "scan": cmd_scan,
+        "ubuntu": cmd_ubuntu,
         "doctor": cmd_doctor,
         "install": cmd_install,
         "init": cmd_init,
@@ -1153,9 +1334,10 @@ def main():
         "up": cmd_up,
         "down": cmd_down,
         "test": cmd_test,
+        "assemble": cmd_assemble,
         "run": cmd_run,
     }
-    
+
     if args.cmd in cmds:
         cmds[args.cmd](args, cfg, root)
     else:
