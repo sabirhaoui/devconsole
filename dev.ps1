@@ -93,11 +93,11 @@ function Show-DevHelp {
     Write-Host "dev history             Affiche les commandes recentes"
     Write-Host "dev init                Lance l inventaire des outils"
     Write-Host "dev run <commande>      Execute une commande externe"
-    Write-Host 'dev lab doctor          Diagnostique twins_lab'
-    Write-Host 'dev lab list            Liste les composants du projet'
-    Write-Host 'dev lab inspect <module>  Analyse les dependances'
-    Write-Host 'dev lab test <module>     Lance les tests du composant'
-    Write-Host 'dev lab run <module>      Lance un composant isole'
+    Write-Host 'dev lab project_twin doctor          Diagnostique twins_lab'
+    Write-Host 'dev lab project_twin list            Liste les composants du projet'
+    Write-Host 'dev lab project_twin inspect <module>  Analyse les dependances'
+    Write-Host 'dev lab project_twin test <module>     Lance les tests du composant'
+    Write-Host 'dev lab project_twin run <module>      Lance un composant isole'
     Write-Host 'dev db-dump             Télécharge un dump distant de pmis_twin en local'
     Write-Host ""
     Write-Host "Exemples :"

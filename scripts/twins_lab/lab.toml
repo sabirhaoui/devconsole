@@ -12,6 +12,22 @@ remote_db_name = "twins_db"
 remote_db_user = "postgres"
 backup_dir = "/var/backups/twins"
 
+[ubuntu.database_sync]
+# PostgreSQL natif : accès via .pgpass sur le serveur, sans prompt de mot de passe.
+# Utiliser "compose" si PostgreSQL tourne dans le projet Compose distant.
+postgres_mode = "native"
+remote_project = "/workspace/twins_project"
+# remote_compose_file = "/workspace/twins_project/docker-compose.yml"
+postgres_service = "postgres"
+neo4j_service = "neo4j"
+neo4j_database = "neo4j"
+# Obligatoire pour --restore : renseigner les images compatibles avec le serveur.
+# postgres_image = "postgres:15"
+# neo4j_image = "neo4j:5.21-community"
+local_postgres_port = 55432
+local_neo4j_port = 57687
+local_neo4j_http_port = 57474
+
 [ubuntu.targets."sftp.prod.assystan"]
 host = "51.44.213.47"
 port = 22

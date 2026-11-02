@@ -2,12 +2,12 @@
 
 Work on one slice of twins_project without booting the whole thing.
 
-    lab install --check                    # verify build prerequisites and the full runtime (no changes)
-    lab install --dashboard                # generate and open the HTML diagnostic dashboard
-    lab install all --dashboard            # install prerequisites, then open the dashboard
-    lab install all                        # install tools and project dependencies
-    lab doctor --phase build               # check build prerequisites only
-    lab doctor                              # check build prerequisites and running services
+    lab project_twin install --check                    # verify build prerequisites and the full runtime (no changes)
+    lab project_twin install --dashboard                # generate and open the HTML diagnostic dashboard
+    lab project_twin install all --dashboard            # install prerequisites, then open the dashboard
+    lab project_twin install all                        # install tools and project dependencies
+    lab project_twin doctor --phase build               # check build prerequisites only
+    lab project_twin doctor                              # check build prerequisites and running services
     python diagnos_dashboard.py --open     # generate and open the HTML diagnostic dashboard
 
     .\lab.ps1 doctor                          # toolchain + repo path
@@ -22,7 +22,7 @@ Work on one slice of twins_project without booting the whole thing.
 Add a component = copy components/experimentation.toml, change paths.
 The lab never edits the main repo: it only reads it and launches processes in it.
 
-`lab install all` uses winget to install missing Python, Node.js, Git, GNU Make,
+`lab project_twin install all` uses winget to install missing Python, Node.js, Git, GNU Make,
 Docker Desktop, PostgreSQL 15, Temurin JDK 17, and the DevConsole CLI tools
 (PowerShell 7, GitHub CLI, jq, uv, Maven, Gradle, Helm, kind, Minikube, GitLab
 Runner, Terraform, CMake, .NET SDK, Go, and Rust/Cargo). It uses pip/pipx for
@@ -41,7 +41,7 @@ initial `neo4j` password. Before connecting a local backend to native databases,
 set `POSTGRES_PASSWORD`, `NEO4J_PASSWORD`, and `NEO4J_URI=bolt://localhost:7688`
 in `.env` to match the local database setup. If WSL/Ubuntu is newly installed
 for Ansible, restart Windows if requested, launch Ubuntu once to create its
-Linux user, then rerun `lab install all`; the installer adds a Windows `ansible`
+Linux user, then rerun `lab project_twin install all`; the installer adds a Windows `ansible`
 command that delegates to Ubuntu WSL.
 
 To install the Podman CLI as an optional tool, run the installer with
@@ -55,7 +55,7 @@ PostgreSQL/Neo4j versions and their ports (5432/7688), as well as Compose
 PostgreSQL readiness, exposed ports, and required running services. It also
 checks the Angular dev server expected on port 4200.
 
-After `lab install all` succeeds, review local secrets in `.env`, start Docker
+After `lab project_twin install all` succeeds, review local secrets in `.env`, start Docker
 Desktop, and run these commands from the Twins project root:
 
     docker compose up --build -d
@@ -65,14 +65,14 @@ Then start Angular from a second PowerShell terminal:
     cd frontend
     npm start
 
-Run `lab doctor` after startup to check the complete build-and-run environment.
-`lab doctor --phase build` reports only toolchain, project files, and dependency
+Run `lab project_twin doctor` after startup to check the complete build-and-run environment.
+`lab project_twin doctor --phase build` reports only toolchain, project files, and dependency
 installation status, so it can be used before starting Docker services.
 
-`python diagnos_dashboard.py` runs the same checks as `lab doctor` and writes
+`python diagnos_dashboard.py` runs the same checks as `lab project_twin doctor` and writes
 `twins-lab-prerequisites.html` in the current directory. Use
-`lab install --dashboard` (also accepts `--dahsboard`) to create and open it;
-`lab install all --dashboard` opens it after installing. The report separates
+`lab project_twin install --dashboard` (also accepts `--dahsboard`) to create and open it;
+`lab project_twin install all --dashboard` opens it after installing. The report separates
 build prerequisites from runtime services, including native database checks
 and Compose PostgreSQL readiness. Use `--output <path>` with the Python script
 to choose another location. A dashboard with missing required prerequisites is
