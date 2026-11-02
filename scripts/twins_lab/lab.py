@@ -1141,6 +1141,9 @@ def cmd_test(args, cfg, root):
 
 
 def cmd_trail(args, cfg, root):
+    if args.trail_action == "production":
+        from production_logs import production_logs
+        return production_logs(args, cfg, LAB)
     from project_run import trail_logs
     return trail_logs(args, root)
 
@@ -1331,11 +1334,32 @@ def main():
     p_logs.add_argument("--tail", type=int, default=100, help="lignes par service (défaut : 100)")
     p_logs.add_argument("--no-follow", action="store_true", help="afficher puis quitter")
 
+    p_production = trail.add_parser("production", help="collecter les logs de production localement via SSH")
+    p_production.add_argument("production_action", choices=["start", "stop", "status", "run"], default="start", nargs="?")
+    p_production.add_argument("--target", help="cible ubuntu.targets de lab.toml")
+    p_production.add_argument("--services", nargs="+", default=[], help="services Compose à collecter")
+    def history_size(value):
+        if value == "all":
+            return value
+        try:
+            number = int(value)
+        except ValueError:
+            raise argparse.ArgumentTypeError("utiliser all ou un entier positif")
+        if number < 0:
+            raise argparse.ArgumentTypeError("utiliser all ou un entier positif")
+        return number
+    p_production.add_argument("--tail", type=history_size, default="all", help="historique initial : all (défaut) ou nombre de lignes")
+    p_production.add_argument("--output", help="dossier source local (défaut : <workspace>/logs/project_twins)")
+    p_production.add_argument("--max-mb", type=int, default=20, help="taille maximale d’un fichier JSONL")
+    p_production.add_argument("--backups", type=int, default=0, help="archives conservées (0 : toutes, défaut)")
+
     cfg, root = load_cfg()
 
     args = ap.parse_args(sys.argv[1:])
-    if args.cmd == "trail" and args.tail < 0:
+    if args.cmd == "trail" and isinstance(args.tail, int) and args.tail < 0:
         p_logs.error("--tail doit être positif ou nul")
+    if args.cmd == "trail" and args.trail_action == "production" and (args.max_mb < 1 or args.backups < 0):
+        p_production.error("--max-mb doit être supérieur à zéro et --backups positif ou nul")
     if not hasattr(args, "extra"):
         args.extra = []
     elif args.cmd == "assemble" and args.extra[:1] == ["--"]:

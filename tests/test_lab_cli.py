@@ -33,6 +33,16 @@ class LabCliTests(unittest.TestCase):
         self.assertEqual((args.engine, args.tail, args.services, args.no_follow),
                          ("podman", 100, [], False))
 
+    def test_production_collector_options(self):
+        args = self.dispatch(["project_twin", "trail", "production", "start", "--target",
+                              "sftp.prod.assystan", "--services", "backend", "celery-worker"], "cmd_trail")
+        self.assertEqual(args.production_action, "start")
+        self.assertEqual(args.services, ["backend", "celery-worker"])
+        self.assertEqual(args.target, "sftp.prod.assystan")
+        self.assertEqual(args.tail, "all")
+        self.assertEqual(args.backups, 0)
+        self.assertIsNone(args.output)
+
     def test_trail_logs_options(self):
         args = self.dispatch(["project_twin", "trail", "logs", "backend", "--engine", "docker",
                               "--tail", "25", "--no-follow"], "cmd_trail")

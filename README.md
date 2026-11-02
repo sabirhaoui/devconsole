@@ -338,6 +338,58 @@ lab project_twin trail logs --engine docker         # si l’instance utilise Do
 `Ctrl+C` quitte le suivi sans arrêter les services. La commande utilise le projet Compose
 de `TWINS_ROOT` (ou de `lab.toml`). Les logs Angular restent dans le terminal de `run all`.
 
+Pour rapatrier les logs de production en continu sur la machine locale :
+
+```powershell
+lab project_twin trail production start --target sftp.prod.assystan
+lab project_twin trail production status --target sftp.prod.assystan
+lab project_twin trail production stop --target sftp.prod.assystan
+# Filtrage optionnel au démarrage : --services backend celery-worker
+# Exécution au premier plan pour diagnostic : remplacer start par run
+```
+
+`status` vérifie le PID auprès du système (`pid_running`) et le verrou du collecteur
+(`running`). `collector_verified: true` confirme les deux vérifications. Un PID peut
+être réutilisé par un autre processus : son existence seule ne prouve pas la collecte.
+`pid_running: null` signifie que le système n’a pas autorisé la vérification du PID.
+`stop` arrête uniquement le collecteur local et conserve les fichiers déjà copiés.
+
+Le collecteur tourne en arrière-plan indépendamment du terminal. Il utilise SSH sans
+interaction et la configuration `ubuntu` / `ubuntu.targets` de `scripts/twins_lab/lab.toml`.
+Les paramètres Compose proviennent de `database_sync` ; une table `production_logs`
+au même niveau permet de remplacer `remote_project`, `remote_compose_project`,
+`remote_compose_file`, `remote_env_file` et `remote_sudo` pour la collecte seule.
+La clé SSH doit être disponible et l’hôte déjà reconnu par SSH ; `sudo`, si activé,
+doit autoriser Docker sans mot de passe. Aucune installation ni modification des services distants.
+
+Les fichiers sont dans `<workspace>/logs/project_twins/<cible>/`, soit
+`C:\workspace\logs\project_twins\sftp.prod.assystan` sur cette machine.
+Utiliser `--output <dossier>` pour choisir un autre dossier racine (également pour status/stop).
+Au premier démarrage dans un nouveau dossier, tout l’historique encore disponible dans
+Docker est récupéré (`--tail all`, défaut), puis la collecte continue en direct.
+Les logs déjà supprimés par la rétention distante ne peuvent pas être récupérés.
+
+- `events.jsonl` : un objet JSON par ligne, écrit immédiatement en UTF-8 ; rotation à 20 Mio,
+  avec conservation de toutes les archives `events.<identifiant>.jsonl` par défaut.
+  La source de l’autre service est l’ensemble des fichiers `events*.jsonl`, y compris
+  le fichier actif qu’il peut suivre en continu. `--max-mb` ajuste la taille ;
+  `--backups N` limite explicitement la rétention à N archives (0 conserve tout).
+- `status.json` : PID, état, source, services et dernier horodatage reçu.
+- `ssh.log` et `collector.log` : diagnostics de connexion et du processus local.
+
+Chaque événement contient `schema_version`, `received_at` (UTC), `timestamp` (source),
+`target`, `host`, `service` (préfixe Compose), `message` et `raw`. Une trace multiligne
+produit plusieurs événements. Les logs peuvent contenir des données sensibles ; limiter
+l’accès au dossier local aux consommateurs prévus.
+
+Après une coupure SSH, reconnexion toutes les cinq secondes avec reprise à partir du
+curseur enregistré, moins cinq secondes. Des doublons sont possibles : le consommateur
+peut les rapprocher par source, service, horodatage et contenu. La reprise dépend des logs
+encore disponibles dans Docker ; ce collecteur ne garantit pas une livraison exhaustive.
+Arrêter le collecteur avant de changer les services filtrés (le curseur existant est réutilisé).
+Il faut relancer `start` après un redémarrage Windows ; ce processus n’est pas installé
+comme service Windows à démarrage automatique.
+
 `Ctrl+C` arrête Angular ; utiliser `--action stop` pour arrêter aussi les services.
 Avec Docker, ajouter `--engine docker` aux commandes de statut et d'arrêt.
 Ce mode utilise les bases du Compose du projet ; il ne raccorde pas automatiquement
