@@ -48,7 +48,14 @@ lab project_twin build studio --standalone
 
 ```
 
-### 4. `test` — Lancer tous les tests ou ceux d'un composant
+### 4. `test` — Tout tester, ou cibler un composant, le backend ou le frontend
+
+La même commande couvre deux périmètres : `all` pour le projet complet, ou le nom d'un composant pour ses tests dédiés. Sans `--side`, elle lance le backend puis le frontend ; `--side backend` et `--side frontend` permettent de choisir un seul côté.
+
+| Périmètre | Backend + frontend | Backend uniquement | Frontend uniquement |
+| --- | --- | --- | --- |
+| Projet complet | `lab project_twin test all` | `lab project_twin test all --side backend` | `lab project_twin test all --side frontend` |
+| Un composant (exemple : `experimentation`) | `lab project_twin test experimentation` | `lab project_twin test experimentation --side backend` | `lab project_twin test experimentation --side frontend` |
 
 Les anciennes commandes `lab test all` et `lab test "component"` deviennent respectivement `lab project_twin test all` et `lab project_twin test "component"`.
 
@@ -68,6 +75,8 @@ lab project_twin test "experimentation"
 ```
 
 Remplacez `experimentation` par un nom affiché par `list`. Les chemins des tests ciblés sont définis dans `scripts/twins_lab/components/<composant>.toml`.
+
+`all` lance la suite backend globale (chemins `[tests].backend_paths` de `lab.toml`, sinon `testpaths` du `backend/pyproject.toml`, sinon `backend/tests`) et Jest depuis `frontend`. Un composant utilise uniquement les `test_paths` de ses sections `[backend]` et `[frontend]`, relatifs à ces deux répertoires. Un composant sans chemins backend existants ou sans tests frontend déclarés est signalé et ignoré pour le côté concerné.
 
 **Choisir le backend ou le frontend :**
 
@@ -296,6 +305,12 @@ lab project_twin run all
 ```
 
 `lab project_twin run all` réutilise les images construites avec Podman, démarre les services
+Compose du projet. `lab project_twin run` est un raccourci équivalent.
+Sous Windows, si Angular tourne déjà pour ce même projet sur le port demandé,
+la commande réutilise cette instance et affiche son URL. Si un autre processus
+occupe ce port, elle propose `--port` pour en choisir un autre.
+
+Le démarrage des services utilise la configuration
 Compose du projet (sans relancer `seed-db`), puis lance Angular dans le terminal.
 Ouvrir **http://localhost:4200** lorsque la compilation Angular est terminée.
 Les requêtes `/api` sont transmises au backend sur `http://localhost:8001`.

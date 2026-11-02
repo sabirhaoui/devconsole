@@ -1311,7 +1311,7 @@ def main():
     p_assemble.add_argument("extra", nargs=argparse.REMAINDER, help="extra arguments passed to PowerShell script")
 
     p_run = sub.add_parser("run", help="launch a component or the complete local project with 'run all'")
-    p_run.add_argument("component")
+    p_run.add_argument("component", nargs="?", default="all")
     p_run.add_argument("side", nargs="?", choices=["backend", "frontend"])
     p_run.add_argument("--engine", choices=["podman", "docker"], default="podman", help="container engine for run all (same as build)")
     p_run.add_argument("--action", choices=["up", "stop", "status"], default="up", help="run all lifecycle action")

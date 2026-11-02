@@ -1,4 +1,5 @@
 import argparse
+import errno
 import json
 from pathlib import Path
 import subprocess
@@ -12,6 +13,36 @@ import project_run
 
 
 class ProjectRunTests(unittest.TestCase):
+    def test_repeated_run_reuses_only_this_projects_frontend(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = self.prepare(temp)
+            socket = MagicMock()
+            socket.__enter__.return_value.bind.side_effect = OSError(errno.EADDRINUSE, "busy")
+            with patch.object(project_run.shutil, "which", side_effect=lambda name: name), \
+                 patch.object(project_run.socket, "socket", return_value=socket), \
+                 patch.object(project_run, "project_frontend_is_running", return_value=True), \
+                 patch.object(project_run.subprocess, "run", side_effect=[
+                     subprocess.CompletedProcess([], 0, "backend\npostgres\n"),
+                     subprocess.CompletedProcess([], 0)]) as run:
+                with self.assertRaises(SystemExit) as result:
+                    project_run.run_project(self.args(), root, root / "generated")
+                self.assertEqual(result.exception.code, 0)
+                self.assertEqual(run.call_count, 2)
+                self.assertFalse(any(call.args[0][0] == "node" for call in run.call_args_list))
+
+    def test_foreign_port_listener_is_not_reused_or_stopped(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = self.prepare(temp)
+            socket = MagicMock()
+            socket.__enter__.return_value.bind.side_effect = OSError(errno.EADDRINUSE, "busy")
+            with patch.object(project_run.shutil, "which", side_effect=lambda name: name), \
+                 patch.object(project_run.socket, "socket", return_value=socket), \
+                 patch.object(project_run, "project_frontend_is_running", return_value=False), \
+                 patch.object(project_run.subprocess, "run") as run:
+                with self.assertRaisesRegex(SystemExit, "--port 4201"):
+                    project_run.run_project(self.args(), root, root / "generated")
+                run.assert_not_called()
+
     def prepare(self, directory):
         root = Path(directory)
         (root / "docker-compose.yml").write_text("services: {}")
