@@ -18,6 +18,7 @@ Commands
                                 (PowerShell args after --, e.g. python lab.py project_twin assemble -- -UpTo scan)
   run <comp> backend|frontend   launch the component alone        (extra args after --)
   run all [--engine podman]     launch the local full project after build
+  trail logs [service ...]     follow logs of the local Compose project
 
 Stdlib only. Requires Python >= 3.11 (tomllib).
 """
@@ -1139,6 +1140,11 @@ def cmd_test(args, cfg, root):
 
 
 
+def cmd_trail(args, cfg, root):
+    from project_run import trail_logs
+    return trail_logs(args, root)
+
+
 def cmd_run(args, cfg, root):
     if args.component == "all":
         if args.side:
@@ -1317,9 +1323,19 @@ def main():
     p_run.add_argument("--action", choices=["up", "stop", "status"], default="up", help="run all lifecycle action")
     p_run.add_argument("--port", type=int, default=4200, help="run all Angular port (default: 4200)")
 
+    p_trail = sub.add_parser("trail", help="consulter les logs du projet local")
+    trail = p_trail.add_subparsers(dest="trail_action", required=True)
+    p_logs = trail.add_parser("logs", help="afficher et suivre les logs des services Compose")
+    p_logs.add_argument("services", nargs="*", help="services à filtrer (par défaut : tous)")
+    p_logs.add_argument("--engine", choices=["podman", "docker"], default="podman")
+    p_logs.add_argument("--tail", type=int, default=100, help="lignes par service (défaut : 100)")
+    p_logs.add_argument("--no-follow", action="store_true", help="afficher puis quitter")
+
     cfg, root = load_cfg()
 
     args = ap.parse_args(sys.argv[1:])
+    if args.cmd == "trail" and args.tail < 0:
+        p_logs.error("--tail doit être positif ou nul")
     if not hasattr(args, "extra"):
         args.extra = []
     elif args.cmd == "assemble" and args.extra[:1] == ["--"]:
@@ -1339,6 +1355,7 @@ def main():
         "test": cmd_test,
         "assemble": cmd_assemble,
         "run": cmd_run,
+        "trail": cmd_trail,
     }
 
     if args.cmd in cmds:

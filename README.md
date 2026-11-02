@@ -326,6 +326,18 @@ lab project_twin run all --action status             # état des conteneurs
 lab project_twin run all --action stop               # arrêter les conteneurs, conserver les données
 ```
 
+Pour consulter les logs de l’instance locale en cours :
+
+```powershell
+lab project_twin trail logs                         # 100 dernières lignes par service, puis suivi en direct
+lab project_twin trail logs backend                 # filtrer sur le backend
+lab project_twin trail logs --tail 500 --no-follow   # afficher puis quitter
+lab project_twin trail logs --engine docker         # si l’instance utilise Docker
+```
+
+`Ctrl+C` quitte le suivi sans arrêter les services. La commande utilise le projet Compose
+de `TWINS_ROOT` (ou de `lab.toml`). Les logs Angular restent dans le terminal de `run all`.
+
 `Ctrl+C` arrête Angular ; utiliser `--action stop` pour arrêter aussi les services.
 Avec Docker, ajouter `--engine docker` aux commandes de statut et d'arrêt.
 Ce mode utilise les bases du Compose du projet ; il ne raccorde pas automatiquement

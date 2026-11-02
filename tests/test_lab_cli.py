@@ -28,6 +28,25 @@ class LabCliTests(unittest.TestCase):
         args = self.dispatch(["project_twin", "run", "all", "--engine", "docker", "--port", "4300"], "cmd_run")
         self.assertEqual((args.component, args.engine, args.port), ("all", "docker", 4300))
 
+    def test_trail_logs_defaults(self):
+        args = self.dispatch(["project_twin", "trail", "logs"], "cmd_trail")
+        self.assertEqual((args.engine, args.tail, args.services, args.no_follow),
+                         ("podman", 100, [], False))
+
+    def test_trail_logs_options(self):
+        args = self.dispatch(["project_twin", "trail", "logs", "backend", "--engine", "docker",
+                              "--tail", "25", "--no-follow"], "cmd_trail")
+        self.assertEqual((args.services, args.engine, args.tail, args.no_follow),
+                         (["backend"], "docker", 25, True))
+
+    def test_trail_negative_tail_rejected(self):
+        with patch.object(sys, "argv", ["lab", "project_twin", "trail", "logs", "--tail", "-1"]), \
+             contextlib.redirect_stderr(io.StringIO()), patch.object(lab, "cmd_trail") as command:
+            with self.assertRaises(SystemExit) as result:
+                lab.main()
+            self.assertEqual(result.exception.code, 2)
+            command.assert_not_called()
+
     def test_component_named_assemble_is_not_an_action(self):
         args = self.dispatch(["project_twin", "test", "assemble", "--unit"], "cmd_test")
         self.assertEqual(args.component, "assemble")

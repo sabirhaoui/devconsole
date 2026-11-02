@@ -13,6 +13,31 @@ import project_run
 
 
 class ProjectRunTests(unittest.TestCase):
+    def test_logs_stream_and_snapshot_preserve_exit_code(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            compose = root / "compose.yaml"
+            compose.write_text("services: {}")
+            for no_follow in (False, True):
+                with self.subTest(no_follow=no_follow), \
+                     patch.object(project_run.shutil, "which", return_value="podman"), \
+                     patch.object(project_run.subprocess, "run", return_value=subprocess.CompletedProcess([], 7)) as run:
+                    args = argparse.Namespace(engine="podman", tail=25, services=["backend"], no_follow=no_follow)
+                    with self.assertRaises(SystemExit) as result:
+                        project_run.trail_logs(args, root)
+                    self.assertEqual(result.exception.code, 7)
+                    expected = ["podman", "compose", "-f", str(compose.resolve()), "logs",
+                                "--tail", "25", "--timestamps"]
+                    if not no_follow:
+                        expected.append("--follow")
+                    run.assert_called_once_with([*expected, "backend"], cwd=root.resolve())
+
+    def test_logs_missing_compose_does_not_run(self):
+        with tempfile.TemporaryDirectory() as temp, patch.object(project_run.subprocess, "run") as run:
+            with self.assertRaisesRegex(SystemExit, "Compose introuvable"):
+                project_run.trail_logs(argparse.Namespace(engine="podman"), Path(temp))
+            run.assert_not_called()
+
     def test_repeated_run_reuses_only_this_projects_frontend(self):
         with tempfile.TemporaryDirectory() as temp:
             root = self.prepare(temp)

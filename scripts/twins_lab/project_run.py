@@ -8,6 +8,30 @@ import socket
 import subprocess
 
 
+def trail_logs(args, root: Path):
+    """Stream existing Compose services without starting or stopping the project."""
+    try:
+        root = root.resolve()
+        compose_file = next((root / name for name in (
+            "compose.yaml", "compose.yml", "docker-compose.yaml", "docker-compose.yml"
+        ) if (root / name).is_file()), None)
+        if not compose_file:
+            raise ValueError(f"Fichier Compose introuvable dans {root}")
+        engine = shutil.which(args.engine)
+        if not engine:
+            raise ValueError(f"{args.engine} introuvable dans le PATH")
+        command = [engine, "compose", "-f", str(compose_file), "logs",
+                   "--tail", str(args.tail), "--timestamps"]
+        if not args.no_follow:
+            command.append("--follow")
+        command.extend(args.services)
+        raise SystemExit(subprocess.run(command, cwd=root).returncode)
+    except KeyboardInterrupt:
+        raise SystemExit(130)
+    except (OSError, ValueError) as error:
+        raise SystemExit(f"Échec trail logs : {error}") from error
+
+
 def project_frontend_is_running(frontend, port):
     """Only reuse a listener whose command belongs to this checkout's Angular CLI."""
     if os.name != "nt":
