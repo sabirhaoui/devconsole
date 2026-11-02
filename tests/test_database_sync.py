@@ -12,6 +12,41 @@ import database_sync as sync
 
 
 class DatabaseSyncTests(unittest.TestCase):
+    def test_shared_neo4j_volume_is_detected_even_with_different_mount_destinations(self):
+        items = [
+            {"Id": "target-id", "Name": "/project-neo4j", "Mounts": [{"Source": "/db/neo", "Destination": "/data"}]},
+            {"Id": "other-id", "Name": "/duplicate-neo4j", "Mounts": [{"Source": "/db/neo", "Destination": "/other"}]},
+            {"Id": "safe-id", "Name": "/safe", "Mounts": [{"Source": "/db/other", "Destination": "/data"}]},
+        ]
+        self.assertEqual(sync.shared_data_users(items, "target"), ["/duplicate-neo4j"])
+        self.assertEqual(sync.shared_data_users([items[0], items[2]], "target"), [])
+
+    def test_remote_compose_selects_deployment_project_env_and_sudo(self):
+        command = sync.remote_compose({"remote_sudo": True, "remote_compose_project": "project-twin",
+                                       "remote_env_file": "/opt/runtime/.env", "remote_project": "/opt/current",
+                                       "remote_compose_file": "/opt/current/docker-compose.deploy.yml"})
+        self.assertEqual(command, ["sudo", "-n", "docker", "compose", "--env-file", "/opt/runtime/.env",
+                                   "-p", "project-twin", "--project-directory", "/opt/current",
+                                   "-f", "/opt/current/docker-compose.deploy.yml"])
+
+    def test_version_check_rejects_older_postgres_before_any_write(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "compose.yaml").write_text("services: {}")
+            with patch.object(sync.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, "pg_dump (PostgreSQL) 15.10", "")) as run:
+                with self.assertRaisesRegex(ValueError, "incompatible"):
+                    sync.validate_local_versions(root, "podman", {"postgres_image": "postgres:18-alpine", "neo4j_image": "neo4j:5.26.32"})
+                self.assertEqual(run.call_count, 1)
+
+    def test_version_check_accepts_matching_server_versions(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "compose.yaml").write_text("services: {}")
+            with patch.object(sync.subprocess, "run", side_effect=[
+                subprocess.CompletedProcess([], 0, "pg_dump (PostgreSQL) 18.6", ""),
+                subprocess.CompletedProcess([], 0, "5.26.32", "")]):
+                sync.validate_local_versions(root, "podman", {"postgres_image": "postgres:18-alpine", "neo4j_image": "neo4j:5.26.32"})
+
     def test_target_inherits_settings_and_rejects_unknown(self):
         config = {"host": "host", "user": "ubuntu", "database_sync": {"postgres_mode": "native"},
                   "targets": {"prod": {"host": "prod", "database_sync": {"neo4j_service": "graph"}}}}
@@ -99,6 +134,89 @@ class DatabaseSyncTests(unittest.TestCase):
         self.assertIn("start neo4j >&2", script)
         self.assertIn("--to-stdout", script)
         self.assertIn("'/srv/my project'", script)
+
+    def restore_fixture(self, tmp):
+        directory = Path(tmp) / "snapshot"
+        directory.mkdir()
+        (directory / "postgres.dump").write_bytes(b"remote-pg")
+        (directory / "neo4j.dump").write_bytes(b"remote-neo")
+        root = Path(tmp) / "project"
+        root.mkdir()
+        (root / "compose.yaml").write_text("services: {}")
+        config = {"services": {"postgres": {"environment": {"POSTGRES_USER": "local", "POSTGRES_DB": "twins"}}, "neo4j": {}}}
+        return directory, root, config
+
+    def test_project_restore_backs_up_before_replacing_and_keeps_local_credentials(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            directory, root, config = self.restore_fixture(tmp)
+            commands = []
+            def execute(command, **kwargs):
+                extra = command[4:]
+                commands.append(extra)
+                if extra == ["config", "--format", "json"]:
+                    return subprocess.CompletedProcess(command, 0, json.dumps(config))
+                if extra == ["ps", "--services", "--status", "running"]:
+                    return subprocess.CompletedProcess(command, 0, "postgres\nneo4j\nbackend\n")
+                if hasattr(kwargs.get("stdout"), "write"):
+                    kwargs["stdout"].write(b"local-backup")
+                return subprocess.CompletedProcess(command, 0)
+            with patch.object(sync.subprocess, "run", side_effect=execute):
+                sync.restore_project(directory, root, "podman", True)
+            self.assertEqual((directory / "local-before-restore/postgres.dump").read_bytes(), b"local-backup")
+            backup_index = next(i for i, cmd in enumerate(commands) if "--to-stdout" in cmd)
+            first_load = next(i for i, cmd in enumerate(commands) if "load" in cmd)
+            self.assertLess(backup_index, first_load)
+            drop = next(cmd for cmd in commands if "dropdb" in cmd)
+            self.assertIn("local", drop)
+            self.assertEqual(commands[-2:], [["start", "neo4j"], ["start", "backend"]])
+
+    def test_project_restore_refuses_unconfirmed_replacement(self):
+        with patch.object(sync.subprocess, "run") as run:
+            with self.assertRaises(ValueError):
+                sync.restore_project(Path("."), Path("."), "podman", False)
+            run.assert_not_called()
+
+    def test_failed_local_backup_never_replaces_database_and_restarts_apps(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            directory, root, config = self.restore_fixture(tmp)
+            def execute(command, **kwargs):
+                if command[-3:] == ["config", "--format", "json"]:
+                    return subprocess.CompletedProcess(command, 0, json.dumps(config))
+                if "ps" in command:
+                    return subprocess.CompletedProcess(command, 0, "postgres\nneo4j\nbackend\n")
+                if "pg_dump" in command:
+                    raise subprocess.CalledProcessError(1, command)
+                return subprocess.CompletedProcess(command, 0)
+            with patch.object(sync.subprocess, "run", side_effect=execute) as run:
+                with self.assertRaises(subprocess.CalledProcessError):
+                    sync.restore_project(directory, root, "podman", True)
+            commands = [call.args[0] for call in run.call_args_list]
+            self.assertFalse(any("dropdb" in cmd or "load" in cmd for cmd in commands))
+            self.assertEqual(commands[-1][-2:], ["start", "backend"])
+
+    def test_failed_injection_restores_original_dumps(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            directory, root, config = self.restore_fixture(tmp)
+            restored = []
+            def execute(command, **kwargs):
+                if "config" in command:
+                    return subprocess.CompletedProcess(command, 0, json.dumps(config))
+                if "ps" in command:
+                    return subprocess.CompletedProcess(command, 0, "postgres\nneo4j\nbackend\n")
+                if hasattr(kwargs.get("stdout"), "write"):
+                    kwargs["stdout"].write(b"original")
+                if "load" in command:
+                    data = kwargs["stdin"].read()
+                    restored.append(data)
+                    if data == b"remote-neo":
+                        raise subprocess.CalledProcessError(1, command)
+                if "pg_restore" in command and "--list" not in command:
+                    restored.append(kwargs["stdin"].read())
+                return subprocess.CompletedProcess(command, 0)
+            with patch.object(sync.subprocess, "run", side_effect=execute):
+                with self.assertRaises(subprocess.CalledProcessError):
+                    sync.restore_project(directory, root, "podman", True)
+            self.assertEqual(restored, [b"remote-neo", b"original", b"original"])
 
 
 if __name__ == "__main__":

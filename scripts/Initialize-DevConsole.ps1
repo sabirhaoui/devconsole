@@ -66,7 +66,7 @@ $report = [ordered]@{
     powershell    = $PSVersionTable.PSVersion.ToString()
     tools         = @($Tools)
     projectMarkers = @($ProjectMarkers)
-    note          = 'Inventaire en lecture seule : aucun logiciel installÃ© ou supprimÃ©.'
+    note          = 'Inventaire en lecture seule : aucun logiciel installé ou supprimé.'
 }
 
 $report | ConvertTo-Json -Depth 6 |
@@ -79,12 +79,12 @@ $markerCount = @($ProjectMarkers | Where-Object Present).Count
 Write-Host ''
 Write-Host '===== INVENTAIRE DEVCONSOLE =====' -ForegroundColor Cyan
 Write-Host "Workspace            : $Workspace"
-Write-Host "Outils dÃ©tectÃ©s      : $installedCount"
+Write-Host "Outils détectés      : $installedCount"
 Write-Host "Outils absents       : $missingCount"
 Write-Host "Marqueurs de projet  : $markerCount / $($Markers.Count)"
 Write-Host "Rapport JSON         : $ReportPath"
 Write-Host ''
-Write-Host 'Outils prÃ©sents :' -ForegroundColor Green
+Write-Host 'Outils présents :' -ForegroundColor Green
 
 $Tools |
     Where-Object Installed |
@@ -102,4 +102,4 @@ $Tools |
     }
 
 Write-Host ''
-Write-Host 'Aucune installation ni suppression effectuÃ©e.'
+Write-Host 'Aucune installation ni suppression effectuée.'

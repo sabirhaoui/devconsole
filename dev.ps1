@@ -83,26 +83,8 @@ function Add-DevHistory {
 }
 
 function Show-DevHelp {
-    Write-Host "DevConsole - aide"
-    Write-Host "-----------------"
-    Write-Host "dev help                Affiche cette aide"
-    Write-Host "dev version             Affiche la version"
-    Write-Host "dev status              Affiche l environnement"
-    Write-Host "dev config              Affiche la configuration"
-    Write-Host "dev aliases             Affiche les alias documentes"
-    Write-Host "dev history             Affiche les commandes recentes"
-    Write-Host "dev init                Lance l inventaire des outils"
-    Write-Host "dev run <commande>      Execute une commande externe"
-    Write-Host 'dev lab project_twin doctor          Diagnostique twins_lab'
-    Write-Host 'dev lab project_twin list            Liste les composants du projet'
-    Write-Host 'dev lab project_twin inspect <module>  Analyse les dependances'
-    Write-Host 'dev lab project_twin test <module>     Lance les tests du composant'
-    Write-Host 'dev lab project_twin run <module>      Lance un composant isole'
-    Write-Host 'dev db-dump             Télécharge un dump distant de pmis_twin en local'
-    Write-Host ""
-    Write-Host "Exemples :"
-    Write-Host "  .\dev.ps1 status"
-    Write-Host "  .\dev.ps1 run git --version"
+    . (Join-Path $Root 'scripts\Welcome.ps1')
+    Show-DevConsoleWelcome -ProjectRoot $Root -Workspace (Split-Path -Parent $Root)
 }
 
 function Show-DevStatus {
@@ -151,6 +133,28 @@ function Invoke-DevExternalCommand {
 Enable-LabShortcut
 
 switch ($Command.ToLowerInvariant()) {
+    'theme' {
+        $palettes = Get-Content (Join-Path $Root 'config\themes.json') -Raw | ConvertFrom-Json
+        if ($Arguments.Count -eq 0 -or $Arguments[0] -eq 'list') {
+            $palettes.PSObject.Properties | ForEach-Object { Write-Host ('{0,-10} {1}' -f $_.Name, $_.Value.description) }
+            Write-Host 'Choisir : dev theme set <nom>'
+            break
+        }
+        if ($Arguments.Count -ne 2 -or $Arguments[0] -ne 'set' -or $Arguments[1] -notin $palettes.PSObject.Properties.Name) {
+            throw 'Usage : dev theme list | dev theme set <ocean|forest|sunset|mono>'
+        }
+        $selection = Join-Path $Root 'data\appearance.json'
+        New-Item -ItemType Directory -Path (Split-Path $selection) -Force | Out-Null
+        @{ theme = $Arguments[1] } | ConvertTo-Json | Set-Content -LiteralPath $selection -Encoding UTF8
+        . (Join-Path $Root 'scripts\Pretty.ps1')
+        Enable-DevConsolePretty -ThemeName $Arguments[1]
+        Write-Host "Theme actif : $($Arguments[1])"
+        break
+    }
+    'pretty' {
+        & (Join-Path $Root 'Set-DevConsolePretty.ps1') @Arguments
+        break
+    }
     'help' {
         Show-DevHelp
         break

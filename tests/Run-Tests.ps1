@@ -50,6 +50,9 @@ catch {
 }
 
 $PowerShellFiles = @(
+    'scripts\Welcome.ps1',
+    'Set-DevConsolePretty.ps1',
+    'scripts\Pretty.ps1',
     'dev.ps1',
     'Start-DevConsole.ps1',
     'install.ps1',
@@ -81,9 +84,9 @@ foreach ($relativePath in $PowerShellFiles) {
 
 Write-Host ''
 if ($Failures -eq 0) {
-    Write-Host 'Tous les tests sont passÃ©s.' -ForegroundColor Green
+    Write-Host 'Tous les tests sont passés.' -ForegroundColor Green
     exit 0
 }
 
-Write-Host "$Failures test(s) en Ã©chec." -ForegroundColor Red
+Write-Host "$Failures test(s) en échec." -ForegroundColor Red
 exit 1

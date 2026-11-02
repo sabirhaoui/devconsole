@@ -48,31 +48,46 @@ lab project_twin build studio --standalone
 
 ```
 
-### 4. `test` — Validation Modulaire
+### 4. `test` — Lancer tous les tests ou ceux d'un composant
 
-Exécute les suites de tests de manière granulaire ou globale :
+Les anciennes commandes `lab test all` et `lab test "component"` deviennent respectivement `lab project_twin test all` et `lab project_twin test "component"`.
 
-* **Tous les tests (isolation SQLite + frontend) :**
+**Lancer toutes les suites backend et frontend du projet :**
+
 ```powershell
 lab project_twin test all
-
 ```
 
+Sans nom de composant, `lab project_twin test` lance également toutes les suites.
 
-* **Tests unitaires purs d'un module :**
+**Lancer les tests d'un composant enregistré :**
+
 ```powershell
-lab project_twin test experimentation --unit
-
+lab project_twin list
+lab project_twin test "experimentation"
 ```
 
+Remplacez `experimentation` par un nom affiché par `list`. Les chemins des tests ciblés sont définis dans `scripts/twins_lab/components/<composant>.toml`.
 
-* **Tests frontend d'un composant :**
+**Choisir le backend ou le frontend :**
+
 ```powershell
-lab project_twin test frontend
-
+lab project_twin test all --side backend
+lab project_twin test all --side frontend
+lab project_twin test "experimentation" --side backend
+lab project_twin test "experimentation" --side frontend
 ```
 
+`frontend` est une valeur de l'option `--side`, pas un nom de composant à passer à `test`.
 
+**Limiter le backend aux tests unitaires :**
+
+```powershell
+lab project_twin test all --side backend --unit
+lab project_twin test "experimentation" --side backend --unit
+```
+
+Le backend utilise `pytest` et le frontend utilise `Jest`. Les tests nécessitent les dépendances du projet et utilisent la racine configurée par `TWINS_ROOT` ou `[project].root` dans `lab.toml`.
 
 ### 5. `run` — Exécution Locale Isolé
 
@@ -162,6 +177,17 @@ Les noms de cible inconnus sont refusés. SSH doit être disponible, la clé acc
 et l'hôte déjà connu d'OpenSSH (`lab project_twin ubuntu auth <cible>` pour la première connexion).
 PostgreSQL utilise l'authentification configurée sur le serveur, par exemple `.pgpass`.
 
+Pour la cible `sftp.prod.assystan`, le dump utilise le PostgreSQL du conteneur
+du projet Compose `project-twin` (base `pmis_twin`, utilisateur `project_twin`).
+Le fichier Compose distant et son `.env` sont sélectionnés explicitement via
+`remote_compose_file`, `remote_env_file` et `remote_compose_project`.
+`remote_sudo = true` permet leur lecture via `sudo -n`, sans prompt.
+Il n'est pas nécessaire d'installer `pg_dump` sur Ubuntu : celui du conteneur est utilisé.
+Avant `--restore-project`, la commande contrôle les versions locales par rapport aux
+images serveur configurées : même majeure PostgreSQL, même branche Neo4j et patch
+local au moins égal au patch serveur. Un échec annule l'opération avant tout dump
+et arrêt distant.
+
 Avec un dump Neo4j déjà préparé sur le serveur (aucun arrêt déclenché) :
 
 ```powershell
@@ -180,9 +206,53 @@ arrête son service, exécute `neo4j-admin database dump` dans un conteneur temp
 avec les mêmes volumes, puis redémarre le service même si le dump échoue. Une perte
 de connexion ou un arrêt brutal de la machine nécessite de vérifier le service
 distant. L'utilisateur SSH doit pouvoir exécuter Docker sans prompt sudo.
+Python 3 doit être présent sur le serveur : avant l'arrêt, la commande refuse le
+dump si un autre conteneur actif monte le même répertoire `/data`. Cela empêche
+un ancien déploiement en doublon de prendre le verrou pendant l'export.
 Pour un Neo4j natif, fournir un dump préparé hors ligne via `--neo4j-dump`.
 
-Pour restaurer immédiatement dans de **nouveaux volumes Docker locaux** :
+### Injecter les bases serveur dans le projet local existant
+
+Pour récupérer les bases et remplacer celles utilisées par `lab project_twin run all` :
+
+```powershell
+lab project_twin ubuntu fetch-db sftp.prod.assystan --stop-remote-neo4j --restore-project --replace-local --engine podman
+```
+
+Cette commande utilise le projet local défini par `TWINS_ROOT` ou `[project].root`.
+Les services `postgres` et `neo4j` doivent déjà être démarrés. Le client PostgreSQL
+et la version Neo4j locaux doivent être compatibles avec les dumps du serveur.
+La configuration distante décrite ci-dessus doit correspondre à l'installation serveur.
+Pour Docker local, remplacer `--engine podman` par `--engine docker`.
+
+Les deux dumps sont entièrement téléchargés avant l'injection. Ensuite, les services
+applicatifs locaux en cours d'exécution sont arrêtés et les deux bases locales sont
+sauvegardées dans `data/db-snapshots/<date>/local-before-restore/`. Neo4j local est
+arrêté pour sa sauvegarde et son chargement. La base PostgreSQL applicative est
+recréée, puis restaurée ; les connexions PostgreSQL restantes sont déconnectées.
+Les services précédemment actifs sont redémarrés après l'opération.
+En cas d'échec, les sauvegardes sont restaurées automatiquement lorsque possible.
+Si cette récupération échoue, les services arrêtés restent arrêtés et le chemin
+des sauvegardes est affiché pour une récupération manuelle.
+
+**Les données et comptes applicatifs locaux sont remplacés par ceux du serveur**,
+y compris les utilisateurs créés seulement en local comme `graph_maker`.
+Se connecter ensuite avec un compte applicatif présent sur le serveur.
+Le `.env`, les identifiants techniques PostgreSQL/Neo4j et la base Neo4j `system`
+restent locaux. Ne pas relancer le build pour cette opération : il n'est pas nécessaire.
+Les navigateurs ou clients externes ne doivent pas écrire directement dans les bases
+pendant la restauration. La sauvegarde et le remplacement concernent les services
+Compose nommés `postgres` et `neo4j` et la base Neo4j `neo4j`.
+
+Si un dump Neo4j est déjà disponible sur le serveur, éviter l'arrêt distant :
+
+```powershell
+lab project_twin ubuntu fetch-db sftp.prod.assystan --neo4j-dump /var/backups/twins/neo4j.dump --restore-project --replace-local --engine podman
+```
+
+### Restaurer dans des bases séparées du projet
+
+Pour restaurer dans de **nouveaux volumes Docker locaux** :
 
 ```powershell
 lab project_twin ubuntu fetch-db sftp.prod.assystan --neo4j-dump /var/backups/twins/neo4j.dump --restore
@@ -207,8 +277,9 @@ pas copiés. La base Neo4j `system` et ses comptes administrateurs ne sont pas c
 Les deux exports sont séquentiels, sans garantie de cohérence transactionnelle
 entre PostgreSQL et Neo4j. Prévoir une période sans écritures si l'application
 exige cette cohérence. Un échec conserve les dumps terminés et retourne un code
-non nul ; les transferts incomplets sont supprimés. La restauration n'écrase
-jamais un volume existant. Le chemin `--output` doit être un **nouveau dossier**.
+non nul ; les transferts incomplets sont supprimés. Seul `--restore-project
+--replace-local` remplace les données des bases existantes ; `--restore` utilise
+des volumes neufs. Le chemin `--output` doit être un **nouveau dossier**.
 Les fichiers contiennent des données et identifiants sensibles et sont ignorés par Git.
 
 ## Lancer un build complet du monorepo

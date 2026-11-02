@@ -1,0 +1,6 @@
+{
+  "ocean": { "description": "Bleu et violet", "accent": "#38BDF8", "git": "#A78BFA", "prompt": "#34D399", "console": "Cyan" },
+  "forest": { "description": "Vert et ambre", "accent": "#4ADE80", "git": "#FBBF24", "prompt": "#86EFAC", "console": "Green" },
+  "sunset": { "description": "Orange et rose", "accent": "#FB923C", "git": "#F472B6", "prompt": "#FBBF24", "console": "Yellow" },
+  "mono": { "description": "Gris discret", "accent": "#E2E8F0", "git": "#94A3B8", "prompt": "#F8FAFC", "console": "Gray" }
+}

@@ -1267,6 +1267,9 @@ def main():
     p_ubuntu.add_argument("--neo4j-dump", help="existing remote Neo4j dump path; no remote service stop")
     p_ubuntu.add_argument("--stop-remote-neo4j", action="store_true", help="allow temporary remote Compose Neo4j stop for dump")
     p_ubuntu.add_argument("--restore", action="store_true", help="restore into new dedicated local Docker volumes")
+    p_ubuntu.add_argument("--restore-project", action="store_true", help="inject dumps into the existing local Twins Compose databases")
+    p_ubuntu.add_argument("--replace-local", action="store_true", help="authorize replacement of local data after an automatic backup")
+    p_ubuntu.add_argument("--engine", choices=["podman", "docker"], default="podman", help="local engine for --restore-project")
 
     p_doctor = sub.add_parser("doctor", help="check tools, dependencies and runtime services")
     p_doctor.add_argument("--json", action="store_true", help="emit diagnostic results as JSON")
