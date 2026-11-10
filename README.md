@@ -1,6 +1,6 @@
 # DevConsole & Twins Lab
 
-Interface PowerShell et moteur CLI modulaire (`lab`) conçus pour administrer, isoler et tester le monorepo **Twins Project** sous Windows.
+Interface PowerShell et CLI modulaire (`lab`) pour travailler sous Windows avec **Twins Project** et lancer les actions de développement des espaces **AVEVA**, **Aras** et **A2 Connector**.
 
 ---
 
@@ -23,23 +23,32 @@ La syntaxe est `lab <projet> <action> [arguments]`. Les projets sont `project_tw
 
 ### Développer avec Aras, AVEVA et le connecteur A2
 
-| Projet | Commandes |
-| --- | --- |
-| AVEVA | `lab aveva run`, `status`, `stop`, `logs` |
-| Aras | `lab aras build`, `run`, `status`, `stop`, `logs`, `test` |
-| Connecteur A2 | `lab a2-connector restore`, `build`, `run`, `status`, `stop`, `logs`, `test`, `lint`, `smoke` |
+| Préfixe | Actions et rôle | À configurer |
+| --- | --- | --- |
+| `lab aveva` | `run` ouvre l’environnement AVEVA. `status`, `stop` et `logs` consultent l’état, arrêtent la cible ou affichent ses journaux selon les lanceurs fournis. | Les quatre actions. Pour `run`, utiliser le point d’entrée AVEVA qui applique le profil de test du poste ou de la session distante. |
+| `lab aras` | `build` prépare le package. `run`, `status`, `stop` et `logs` pilotent l’environnement de développement. `test` lance sa suite de tests. | Les six actions, avec les points d’entrée de l’installation ou les scripts de recette Aras. |
+| `lab a2-connector` | `restore` restaure les dépendances, `build` compile, `test` lance les tests et `lint` vérifie le formatage. `run`, `status`, `stop` et `logs` pilotent l’API. `smoke` lance le scénario de vérification configuré. | `run`, `status`, `stop`, `logs` et `smoke`. Les quatre autres actions utilisent par défaut `dotnet restore`, `dotnet build`, `dotnet test` et `dotnet format --verify-no-changes`. |
 
-Copiez [lab.local.example.toml](scripts/twins_lab/lab.local.example.toml) en `scripts/twins_lab/lab.local.toml` et renseignez les lanceurs du poste. AVEVA et Aras nécessitent les points d’entrée de vos installations. Les commandes `restore`, `build`, `test` et `lint` d’A2 utilisent déjà `dotnet` et nécessitent une solution .NET dans le dépôt. Configurez `run` avec le chemin du projet de l’API et `smoke` avec le script de test des deux flux sur un environnement de développement.
+**Configurer les lanceurs.** Copiez [lab.local.example.toml](scripts/twins_lab/lab.local.example.toml) en `scripts/twins_lab/lab.local.toml` si ce fichier n’existe pas encore. Décommentez les actions utiles et remplacez les exemples par les points d’entrée réels. Chaque commande est une liste TOML contenant l’exécutable puis un élément par argument. Pour un script PowerShell, utilisez par exemple `["powershell.exe", "-NoProfile", "-File", "./scripts/status.ps1"]`. Les chemins relatifs sont évalués depuis la racine du projet. Le fichier local est ignoré par Git et ses commandes remplacent les valeurs par défaut action par action.
 
-Par défaut, les commandes s’exécutent dans les dossiers frères de `devConsole`. Pour changer de dossier, utilisez `--root` avant l’action, les variables `AVEVA_ROOT`, `ARAS_ROOT`, `A2_CONNECTOR_ROOT`, ou `root` dans la configuration locale, dans cet ordre de priorité.
+Pour A2, les actions .NET nécessitent le SDK dans le `PATH` et une solution ou un projet compatible dans la racine choisie. Renseignez le chemin réel du projet de l’API pour `run`. Pour `smoke`, fournissez un script qui utilise des données de test et vérifie les flux AVEVA vers Aras et Aras vers AVEVA lorsque ces flux sont disponibles. La console exécute les lanceurs configurés. Le suivi des processus et la collecte des journaux dépendent de ces lanceurs.
+
+**Choisir la racine.** La priorité est `--root` placé avant l’action, puis la variable du projet (`AVEVA_ROOT`, `ARAS_ROOT` ou `A2_CONNECTOR_ROOT`), puis la clé TOML `root`. Par défaut, la CLI utilise les dossiers frères `aveva`, `aras` et `a2-connector` à côté de `devConsole`.
+
+**Vérifier avant de lancer.** Les trois projets exposent `doctor`. Ce diagnostic vérifie la présence du dossier et de l’exécutable de chaque action. Il signale les actions non configurées et retourne un code non nul si une vérification échoue. Quand le lanceur est PowerShell, vérifiez aussi le chemin du script passé à `-File`. Pour une action configurée, `--dry-run` affiche `cwd` et `argv` sans valider l’existence des fichiers ni exécuter la commande.
 
 ```powershell
 lab aveva doctor
+lab aveva run --dry-run
+lab aras doctor
 lab aras build --dry-run
-lab a2-connector --root C:/workspace/a2-connector test '--' --filter Category=Unit
+lab a2-connector doctor
+lab a2-connector --root C:/workspace/a2-connector test --dry-run '--' --filter Category=Unit
 ```
 
-`doctor` vérifie le dossier et la présence des lanceurs. `--dry-run` affiche le dossier et les arguments sans lancer le programme. Dans PowerShell, écrivez le séparateur `'--'` entre guillemets pour transmettre les arguments qui suivent au lanceur.
+Dans PowerShell, écrivez le séparateur `'--'` entre guillemets pour transmettre les arguments suivants au lanceur. Retirez `--dry-run` lorsque la commande affichée correspond à l’action voulue.
+
+**Essai PML dans E3D.** Après `lab aveva run`, ouvrez le projet de test dans E3D et relevez le module, le build et le `PMLLIB` de la session avec `Q EVAR PMLLIB` dans la fenêtre de commandes. Le profil AVEVA doit rendre le dossier de test accessible au processus E3D. Le chargement, le rechargement et la vérification du clic sur **Export to Aras** se font dans E3D. Ce premier essai vérifie l’affichage de l’alerte `Export to Aras — test réussi`. Le scénario `lab a2-connector smoke` correspond à la recette ultérieure des échanges du connecteur.
 
 ### 1. `list` — Inventaire des Composants
 
