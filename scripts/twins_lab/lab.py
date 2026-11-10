@@ -1141,6 +1141,9 @@ def cmd_test(args, cfg, root):
 
 
 def cmd_trail(args, cfg, root):
+    if args.trail_action == "local":
+        from local_logs import local_logs
+        return local_logs(args, root, LAB)
     if args.trail_action == "production":
         from production_logs import production_logs
         return production_logs(args, cfg, LAB)
@@ -1257,6 +1260,9 @@ TWINS_HTTP_PORT=3000
 def main():
     ap = argparse.ArgumentParser(prog="lab", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     projects = ap.add_subparsers(dest="project", required=True)
+    from workspace_projects import register_projects, run_action
+
+    register_projects(projects)
     project = projects.add_parser(
         "project_twin", help="administrer le projet Twins",
         description="Commandes du projet Twins : lab project_twin <action> [arguments]",
@@ -1353,13 +1359,24 @@ def main():
     p_production.add_argument("--max-mb", type=int, default=20, help="taille maximale d’un fichier JSONL")
     p_production.add_argument("--backups", type=int, default=0, help="archives conservées (0 : toutes, défaut)")
 
-    cfg, root = load_cfg()
+    p_local = trail.add_parser("local", help="collecter les logs Compose locaux en JSONL")
+    p_local.add_argument("local_action", choices=["start", "stop", "status", "run"], default="start", nargs="?")
+    p_local.add_argument("--engine", choices=["podman", "docker"], default="podman")
+    p_local.add_argument("--services", nargs="+", default=[], help="services Compose à collecter")
+    p_local.add_argument("--tail", type=history_size, default="all", help="historique initial : all (défaut) ou nombre de lignes")
+    p_local.add_argument("--max-mb", type=int, default=20, help="taille maximale d’un fichier JSONL")
+    p_local.add_argument("--backups", type=int, default=0, help="archives conservées (0 : toutes, défaut)")
 
     args = ap.parse_args(sys.argv[1:])
+    if args.project != "project_twin":
+        sys.exit(run_action(args, LAB / "lab.toml"))
+
+    cfg, root = load_cfg()
     if args.cmd == "trail" and isinstance(args.tail, int) and args.tail < 0:
         p_logs.error("--tail doit être positif ou nul")
-    if args.cmd == "trail" and args.trail_action == "production" and (args.max_mb < 1 or args.backups < 0):
-        p_production.error("--max-mb doit être supérieur à zéro et --backups positif ou nul")
+    if args.cmd == "trail" and args.trail_action in ("production", "local") and (args.max_mb < 1 or args.backups < 0):
+        parser = p_local if args.trail_action == "local" else p_production
+        parser.error("--max-mb doit être supérieur à zéro et --backups positif ou nul")
     if not hasattr(args, "extra"):
         args.extra = []
     elif args.cmd == "assemble" and args.extra[:1] == ["--"]:

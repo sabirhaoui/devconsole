@@ -24,7 +24,7 @@ class ArchiveHandler(RotatingFileHandler):
             self.stream.close()
             self.stream = None
         source = Path(self.baseFilename)
-        source.rename(source.with_name(f"events.{time.time_ns()}.jsonl"))
+        source.rename(source.with_name(f"{source.stem}.{time.time_ns()}{source.suffix}"))
         self.stream = self._open()
 
 
@@ -169,6 +169,12 @@ def reader(stream, output, stopped):
 def collect(args, cfg, directory):
     remote = connection(cfg.get("ubuntu", {}), args.target)
     settings = {**remote.get("database_sync", {}), **remote.get("production_logs", {})}
+    collect_stream(args, directory, remote, args.target,
+                   lambda since: ssh_command(remote, settings, args.services, since, args.tail),
+                   "ssh.log")
+
+
+def collect_stream(args, directory, source, target, command, error_file, project=None):
     for service in args.services:
         if not re.fullmatch(r"[a-zA-Z0-9][a-zA-Z0-9_.-]*", service):
             raise ValueError(f"Service invalide : {service}")
@@ -179,21 +185,25 @@ def collect(args, cfg, directory):
     logger.propagate = False
     logger.addHandler(handler)
     state = read_state(directory)
-    cursor = state.get("cursor")
-    state = {"pid": os.getpid(), "target": args.target, "host": remote["host"],
+    same_source = project is None or (state.get("project") == project and state.get("services") == args.services)
+    cursor = state.get("cursor") if same_source else None
+    sources = set(state.get("sources", [])) if same_source else set()
+    state = {"pid": os.getpid(), "target": target, "host": source["host"],
              "services": args.services, "started_at": now(), "cursor": cursor}
+    if project is not None:
+        state["project"] = project
     process = None
     def update(status, **values):
-        state.update(status=status, updated_at=now(), cursor=cursor, **values)
+        state.update(status=status, updated_at=now(), cursor=cursor, sources=sorted(sources), **values)
         save(directory / "status.json", state)
     try:
         while not (directory / "stop").exists():
             update("connecting")
             try:
-                with (directory / "ssh.log").open("ab") as errors:
+                with (directory / error_file).open("ab") as errors:
                     process = subprocess.Popen(
-                        ssh_command(remote, settings, args.services,
-                                    resume_since(cursor) if cursor else None, args.tail),
+                        command(resume_since(cursor) if cursor else None),
+                        cwd=project,
                         stdout=subprocess.PIPE, stderr=errors, text=True, encoding="utf-8", errors="replace",
                         **({"creationflags": subprocess.CREATE_NO_WINDOW} if os.name == "nt" else {}))
                     output = queue.Queue(maxsize=10000)
@@ -210,8 +220,10 @@ def collect(args, cfg, directory):
                         if line is None:
                             break
                         if line:
-                            event = record(line, remote, args.target)
+                            event = record(line, source, target)
                             logger.info(json.dumps(event, ensure_ascii=False))
+                            if event["service"]:
+                                sources.add(event["service"])
                             if event["timestamp"]:
                                 try:
                                     resume_since(event["timestamp"])
@@ -253,17 +265,31 @@ def production_logs(args, cfg, lab):
     if not re.fullmatch(r"[a-zA-Z0-9][a-zA-Z0-9_.-]*", name) or name in (".", ".."):
         raise SystemExit("Nom de cible invalide")
     output = Path(args.output).expanduser().resolve() if args.output else lab.parents[1].parent / "logs" / "project_twins"
-    directory = output / name
+    options = ["--output", str(output)]
+    if args.target:
+        options += ["--target", args.target]
+    def run():
+        collect(args, cfg, output / name)
+    def validate():
+        connection(cfg.get("ubuntu", {}), args.target)
+    manage_collector(args, lab, output / name, "production", options, run, validate)
+
+
+def manage_collector(args, lab, directory, kind, options, run, validate):
+    action = args.production_action if kind == "production" else args.local_action
     directory.mkdir(parents=True, exist_ok=True)
     guard = lock(directory)
-    if args.production_action == "status":
+    if action == "status":
         try:
-            print(json.dumps(collector_status(directory, guard is None), ensure_ascii=False, indent=2))
+            status = collector_status(directory, guard is None)
+            if kind == "local":
+                status["angular_files"] = sorted(str(path) for path in directory.glob("angular.*.jsonl"))
+            print(json.dumps(status, ensure_ascii=False, indent=2))
         finally:
             if guard:
                 guard.close()
         return
-    if args.production_action == "stop":
+    if action == "stop":
         if guard:
             guard.close()
             print("Collecteur déjà arrêté.")
@@ -278,21 +304,19 @@ def production_logs(args, cfg, lab):
                 return
         raise SystemExit("Arrêt demandé ; vérifier le status dans quelques secondes.")
     if not guard:
-        if args.production_action == "run":
+        if action == "run":
             raise SystemExit("Collecteur déjà actif.")
         print("Collecteur déjà actif.")
         return
     try:
-        connection(cfg.get("ubuntu", {}), args.target)
+        validate()
         (directory / "stop").unlink(missing_ok=True)
-        if args.production_action == "run":
-            collect(args, cfg, directory)
+        if action == "run":
+            run()
             return
-        command = [sys.executable, str(lab / "lab.py"), "project_twin", "trail", "production", "run",
-                   "--output", str(output), "--tail", str(args.tail),
+        command = [sys.executable, str(lab / "lab.py"), "project_twin", "trail", kind, "run",
+                   *options, "--tail", str(args.tail),
                    "--max-mb", str(args.max_mb), "--backups", str(args.backups)]
-        if args.target:
-            command += ["--target", args.target]
         if args.services:
             command += ["--services", *args.services]
         guard.close()
@@ -312,7 +336,7 @@ def production_logs(args, cfg, lab):
                 return
         raise SystemExit(f"Démarrage en attente ; consulter le status et {directory / 'collector.log'}")
     except (OSError, ValueError) as error:
-        raise SystemExit(f"Échec collecte production : {error}") from error
+        raise SystemExit(f"Échec collecte {kind} : {error}") from error
     finally:
         if guard:
             guard.close()

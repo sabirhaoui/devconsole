@@ -8,19 +8,23 @@ import socket
 import subprocess
 
 
+def compose_command(root, engine_name):
+    compose_file = next((root / name for name in (
+        "compose.yaml", "compose.yml", "docker-compose.yaml", "docker-compose.yml"
+    ) if (root / name).is_file()), None)
+    if not compose_file:
+        raise ValueError(f"Fichier Compose introuvable dans {root}")
+    engine = shutil.which(engine_name)
+    if not engine:
+        raise ValueError(f"{engine_name} introuvable dans le PATH")
+    return [engine, "compose", "-f", str(compose_file)]
+
+
 def trail_logs(args, root: Path):
     """Stream existing Compose services without starting or stopping the project."""
     try:
         root = root.resolve()
-        compose_file = next((root / name for name in (
-            "compose.yaml", "compose.yml", "docker-compose.yaml", "docker-compose.yml"
-        ) if (root / name).is_file()), None)
-        if not compose_file:
-            raise ValueError(f"Fichier Compose introuvable dans {root}")
-        engine = shutil.which(args.engine)
-        if not engine:
-            raise ValueError(f"{args.engine} introuvable dans le PATH")
-        command = [engine, "compose", "-f", str(compose_file), "logs",
+        command = compose_command(root, args.engine) + ["logs",
                    "--tail", str(args.tail), "--timestamps"]
         if not args.no_follow:
             command.append("--follow")
@@ -57,15 +61,7 @@ def project_frontend_is_running(frontend, port):
 def run_project(args, root: Path, generated: Path):
     try:
         root = root.resolve()
-        compose_file = next((root / name for name in (
-            "compose.yaml", "compose.yml", "docker-compose.yaml", "docker-compose.yml"
-        ) if (root / name).is_file()), None)
-        if not compose_file:
-            raise ValueError(f"Fichier Compose introuvable dans {root}")
-        engine = shutil.which(args.engine)
-        if not engine:
-            raise ValueError(f"{args.engine} introuvable dans le PATH")
-        compose = [engine, "compose", "-f", str(compose_file)]
+        compose = compose_command(root, args.engine)
         if args.action != "up":
             result = subprocess.run(compose + (["stop"] if args.action == "stop" else ["ps"]), cwd=root)
             raise SystemExit(result.returncode)
@@ -116,10 +112,12 @@ def run_project(args, root: Path, generated: Path):
         print(f"Ctrl+C arrête Angular. Arrêt des conteneurs : lab project_twin run all --engine {args.engine} --action stop", flush=True)
         environment = os.environ.copy()
         environment["NG_CLI_ANALYTICS"] = "false"
-        result = subprocess.run([node, str(angular), "serve", "--host", "127.0.0.1",
-                                 "--port", str(args.port), "--proxy-config", str(proxy_path), *args.extra],
-                                cwd=frontend, env=environment)
-        raise SystemExit(result.returncode)
+        from local_logs import local_directory, run_angular
+        directory = local_directory(generated.parent, args.engine)
+        raise SystemExit(run_angular(
+            [node, str(angular), "serve", "--host", "127.0.0.1", "--port", str(args.port),
+             "--proxy-config", str(proxy_path), *args.extra],
+            frontend, environment, directory, args.port))
     except KeyboardInterrupt:
         raise SystemExit(130)
     except (OSError, ValueError, subprocess.CalledProcessError) as error:

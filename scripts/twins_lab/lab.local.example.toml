@@ -1,0 +1,30 @@
+# Copier vers lab.local.toml, puis adapter les chemins et décommenter les actions.
+# Les scripts ci-dessous sont des exemples de points d’entrée à fournir dans
+# chaque projet. Les chemins relatifs sont évalués depuis la racine du projet.
+
+[workspace_projects.aveva]
+# root = "C:/workspace/aveva"
+[workspace_projects.aveva.commands]
+# run = ["C:/chemin/vers/le-lanceur-AVEVA.exe"]
+# status = ["powershell.exe", "-NoProfile", "-File", "./scripts/status.ps1"]
+# stop = ["powershell.exe", "-NoProfile", "-File", "./scripts/stop.ps1"]
+# logs = ["powershell.exe", "-NoProfile", "-File", "./scripts/logs.ps1"]
+
+[workspace_projects.aras]
+# root = "C:/workspace/aras"
+[workspace_projects.aras.commands]
+# build = ["powershell.exe", "-NoProfile", "-File", "./scripts/build.ps1"]
+# run = ["powershell.exe", "-NoProfile", "-File", "./scripts/run.ps1"]
+# status = ["powershell.exe", "-NoProfile", "-File", "./scripts/status.ps1"]
+# stop = ["powershell.exe", "-NoProfile", "-File", "./scripts/stop.ps1"]
+# logs = ["powershell.exe", "-NoProfile", "-File", "./scripts/logs.ps1"]
+# test = ["powershell.exe", "-NoProfile", "-File", "./scripts/test.ps1"]
+
+[workspace_projects."a2-connector"]
+# root = "C:/workspace/a2-connector"
+[workspace_projects."a2-connector".commands]
+# run = ["dotnet", "run", "--project", "./src/A2.Api/A2.Api.csproj"]
+# status = ["powershell.exe", "-NoProfile", "-File", "./scripts/status.ps1"]
+# stop = ["powershell.exe", "-NoProfile", "-File", "./scripts/stop.ps1"]
+# logs = ["powershell.exe", "-NoProfile", "-File", "./scripts/logs.ps1"]
+# smoke = ["powershell.exe", "-NoProfile", "-File", "./scripts/smoke.ps1"]

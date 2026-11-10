@@ -36,3 +36,11 @@ host = "51.44.213.47"
 port = 22
 user = "ubuntu"
 ssh_key = "~/.ssh/assystem_key.pem"
+
+# Les racines pointent par défaut vers les dossiers frères de devConsole.
+# Les lanceurs propres au poste se déclarent dans lab.local.toml.
+[workspace_projects."a2-connector".commands]
+restore = ["dotnet", "restore"]
+build = ["dotnet", "build"]
+test = ["dotnet", "test"]
+lint = ["dotnet", "format", "--verify-no-changes"]

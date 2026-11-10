@@ -19,7 +19,27 @@ Le Twins Lab ambitionne de centraliser la gestion du projet au bout des doigts :
 
 Grâce au profil PowerShell configuré, la commande globale `lab` est directement accessible depuis n'importe quel répertoire du workspace.
 
-La syntaxe est désormais `lab <projet> <action> [arguments]`. Le projet disponible est `project_twin`. Le nom du projet est obligatoire : `lab assemble build` devient `lab project_twin assemble build`. Consultez `lab --help` et `lab project_twin --help`.
+La syntaxe est `lab <projet> <action> [arguments]`. Les projets sont `project_twin`, `aras`, `aveva` et `a2-connector`. Consultez `lab --help` ou `lab <projet> --help`.
+
+### Développer avec Aras, AVEVA et le connecteur A2
+
+| Projet | Commandes |
+| --- | --- |
+| AVEVA | `lab aveva run`, `status`, `stop`, `logs` |
+| Aras | `lab aras build`, `run`, `status`, `stop`, `logs`, `test` |
+| Connecteur A2 | `lab a2-connector restore`, `build`, `run`, `status`, `stop`, `logs`, `test`, `lint`, `smoke` |
+
+Copiez [lab.local.example.toml](scripts/twins_lab/lab.local.example.toml) en `scripts/twins_lab/lab.local.toml` et renseignez les lanceurs du poste. AVEVA et Aras nécessitent les points d’entrée de vos installations. Les commandes `restore`, `build`, `test` et `lint` d’A2 utilisent déjà `dotnet` et nécessitent une solution .NET dans le dépôt. Configurez `run` avec le chemin du projet de l’API et `smoke` avec le script de test des deux flux sur un environnement de développement.
+
+Par défaut, les commandes s’exécutent dans les dossiers frères de `devConsole`. Pour changer de dossier, utilisez `--root` avant l’action, les variables `AVEVA_ROOT`, `ARAS_ROOT`, `A2_CONNECTOR_ROOT`, ou `root` dans la configuration locale, dans cet ordre de priorité.
+
+```powershell
+lab aveva doctor
+lab aras build --dry-run
+lab a2-connector --root C:/workspace/a2-connector test '--' --filter Category=Unit
+```
+
+`doctor` vérifie le dossier et la présence des lanceurs. `--dry-run` affiche le dossier et les arguments sans lancer le programme. Dans PowerShell, écrivez le séparateur `'--'` entre guillemets pour transmettre les arguments qui suivent au lanceur.
 
 ### 1. `list` — Inventaire des Composants
 
@@ -337,6 +357,26 @@ lab project_twin trail logs --engine docker         # si l’instance utilise Do
 
 `Ctrl+C` quitte le suivi sans arrêter les services. La commande utilise le projet Compose
 de `TWINS_ROOT` (ou de `lab.toml`). Les logs Angular restent dans le terminal de `run all`.
+
+Pour collecter les logs de développement dans des fichiers exploitables :
+
+```powershell
+lab project_twin trail local start
+lab project_twin trail local status
+lab project_twin trail local stop
+```
+
+Le collecteur récupère l’historique disponible des conteneurs Compose et suit les nouvelles lignes.
+`status` indique le PID, le curseur, les sources Compose déjà observées et les fichiers Angular.
+Utiliser `--engine docker` sur les trois commandes si l’instance tourne avec Docker.
+Pour cibler certains services, ajouter par exemple `--services backend postgres` au démarrage.
+
+Dans `C:\workspace\logs\project_twins\local\podman` (ou `local\docker`),
+lire `events*.jsonl` pour Compose et `angular.*.jsonl` pour la sortie du serveur Angular.
+Les événements utilisent le même format que la collecte de production et portent `target: "local"`.
+Au prochain `run all`, Angular écrit aussi dans ce dossier, avec une source par port.
+Un Angular déjà lancé garde sa sortie dans son terminal jusqu’à son prochain démarrage.
+`trail local stop` arrête le collecteur Compose. Angular écrit tant que `run all` tourne.
 
 Pour rapatrier les logs de production en continu sur la machine locale :
 

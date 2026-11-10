@@ -90,6 +90,7 @@ class ProjectRunTests(unittest.TestCase):
                 return subprocess.CompletedProcess(command, 0)
             with patch.object(project_run.shutil, "which", side_effect=lambda name: name), \
                  patch.object(project_run.socket, "socket", return_value=MagicMock()), \
+                 patch("local_logs.run_angular", return_value=0) as angular, \
                  patch.object(project_run.subprocess, "run", side_effect=execute) as run:
                 with self.assertRaises(SystemExit) as exit_info:
                     project_run.run_project(self.args(), root, root / "generated")
@@ -101,7 +102,7 @@ class ProjectRunTests(unittest.TestCase):
             commands = [call.args[0] for call in run.call_args_list]
             self.assertIn("--no-build", commands[1])
             self.assertNotIn("seed-db", commands[1])
-            self.assertEqual(commands[2][0], "node")
+            self.assertEqual(angular.call_args.args[0][0], "node")
 
     def test_failed_compose_does_not_launch_frontend(self):
         with tempfile.TemporaryDirectory() as temp:
