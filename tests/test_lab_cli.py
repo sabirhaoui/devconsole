@@ -1,7 +1,9 @@
 import contextlib
 import io
+import os
 from pathlib import Path
 import sys
+from tempfile import TemporaryDirectory
 import unittest
 from unittest.mock import patch
 
@@ -14,6 +16,55 @@ class LabCliTests(unittest.TestCase):
         with patch.object(sys, "argv", ["lab", *arguments]), patch.object(lab, handler) as command:
             lab.main()
         return command.call_args.args[0]
+
+    def run_aveva_log(self, local_appdata, *arguments):
+        stdout, stderr = io.StringIO(), io.StringIO()
+        with patch.dict(os.environ, {"LOCALAPPDATA": local_appdata}), \
+             patch.object(sys, "argv", ["lab", "aveva", "log", *arguments]), \
+             contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+            with self.assertRaises(SystemExit) as result:
+                lab.main()
+        return result.exception.code, stdout.getvalue(), stderr.getvalue()
+
+    def test_aveva_log_reads_latest_lines(self):
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "Aveva" / "AVEVA Unified Engineering_init.log"
+            path.parent.mkdir()
+            lines = [f"Initialisation {number}" for number in range(81)]
+            lines += ["custom_evars.bat:12 Unsupported command exit", "custom_evars.bat:13 Invalid syntax"]
+            path.write_text("\n".join(lines) + "\n", encoding="utf-8-sig")
+            for options, count in (([], 80), (["--lines", "2"], 2)):
+                with self.subTest(options=options):
+                    code, stdout, stderr = self.run_aveva_log(directory, *options)
+                    header, modified, *output = stdout.splitlines()
+                    self.assertEqual((code, stderr), (0, ""))
+                    self.assertIn(str(path.resolve()), header)
+                    self.assertRegex(modified, r"^Dernière modification : \d{4}-\d{2}-\d{2}")
+                    self.assertEqual(output, lines[-count:])
+
+    def test_aveva_log_missing_file(self):
+        with TemporaryDirectory() as directory:
+            code, stdout, stderr = self.run_aveva_log(directory)
+        self.assertEqual((code, stdout), (1, ""))
+        self.assertIn("journal introuvable", stderr)
+        self.assertIn("AVEVA Unified Engineering_init.log", stderr)
+
+    def test_aveva_log_follows_appended_lines(self):
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "Aveva" / "AVEVA Unified Engineering_init.log"
+            path.parent.mkdir()
+            path.write_text("Ancien diagnostic\n", encoding="utf-8")
+
+            def append_line(_interval):
+                if pause.call_count > 1:
+                    raise KeyboardInterrupt
+                with path.open("a", encoding="utf-8") as journal:
+                    journal.write("Invalid syntax\n")
+
+            with patch("workspace_projects.sleep", side_effect=append_line) as pause:
+                code, stdout, stderr = self.run_aveva_log(directory, "--lines", "0", "--follow")
+        self.assertEqual((code, stderr), (130, ""))
+        self.assertEqual(stdout.splitlines()[2:], ["Invalid syntax"])
 
     def test_assemble_build(self):
         args = self.dispatch(["project_twin", "assemble", "build"], "cmd_assemble")

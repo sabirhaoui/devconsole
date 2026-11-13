@@ -1,12 +1,15 @@
 """Dispatch development actions in the sibling Aras, AVEVA and A2 workspaces."""
 
 import argparse
+from collections import deque
+from datetime import datetime
 import json
 import os
 from pathlib import Path
 import shutil
 import subprocess
 import sys
+from time import sleep
 import tomllib
 
 
@@ -15,11 +18,19 @@ PROJECTS = {
     "aras": ("environnement Aras", "ARAS_ROOT", ("build", "run", "status", "stop", "logs", "test")),
     "a2-connector": (
         "connecteur AVEVA ↔ Aras", "A2_CONNECTOR_ROOT",
-        ("restore", "build", "run", "status", "stop", "logs", "test", "lint", "smoke"),
+        ("restore", "build", "run", "status", "stop", "logs", "test", "lint", "smoke",
+         "test-integrity", "inspect-ifc", "test-api", "publish", "test-published", "run-published", "health"),
     ),
 }
 
 HELP = {
+    "test-integrity": "vérifier l’intégrité IFC",
+    "inspect-ifc": "afficher la taille et le SHA-256 d’un IFC",
+    "test-api": "vérifier l’API IFC, la concurrence et la reprise",
+    "publish": "publier le connecteur",
+    "test-published": "vérifier le livrable publié",
+    "run-published": "démarrer le livrable publié",
+    "health": "interroger GET /health/live",
     "restore": "restaurer les dépendances",
     "build": "compiler ou préparer le package",
     "run": "démarrer le projet",
@@ -32,12 +43,23 @@ HELP = {
 }
 
 
+def _line_count(value):
+    count = int(value)
+    if not 0 <= count <= sys.maxsize:
+        raise argparse.ArgumentTypeError("utiliser un nombre de lignes positif ou nul")
+    return count
+
+
 def register_projects(parsers):
     for name, (description, env_var, actions) in PROJECTS.items():
         parser = parsers.add_parser(name, help=description)
         parser.add_argument("--root", type=Path, help=f"remplacer {env_var} et la racine configurée")
         commands = parser.add_subparsers(dest="cmd", required=True)
         commands.add_parser("doctor", help="vérifier le dossier et les lanceurs sans les exécuter")
+        if name == "aveva":
+            log = commands.add_parser("log", help="lire le journal de démarrage Unified Engineering")
+            log.add_argument("--lines", type=_line_count, default=80, help="nombre de lignes (défaut : 80)")
+            log.add_argument("--follow", action="store_true", help="suivre les nouvelles lignes jusqu’à Ctrl+C")
         for action in actions:
             command = commands.add_parser(action, help=HELP[action])
             command.add_argument("--dry-run", action="store_true", help="afficher la commande sans l’exécuter")
@@ -52,10 +74,17 @@ def _settings(config_file, project):
             return tomllib.load(stream).get("workspace_projects", {}).get(project, {})
 
     defaults = read(config_file)
+    commands = defaults.get("commands", {})
+    for action, command in commands.items():
+        if isinstance(command, list):
+            commands[action] = [
+                str(config_file.resolve().with_name("a2-connector.ps1")) if arg == "{a2_launcher}" else arg
+                for arg in command
+            ]
     local = read(config_file.with_name("lab.local.toml"))
     return (
         local.get("root", defaults.get("root")),
-        {**defaults.get("commands", {}), **local.get("commands", {})},
+        {**commands, **local.get("commands", {})},
     )
 
 
@@ -80,9 +109,35 @@ def _command(root, command):
     return [str(executable), *command[1:]]
 
 
+def _show_aveva_log(lines, follow):
+    local_appdata = os.environ.get("LOCALAPPDATA")
+    if not local_appdata:
+        raise ValueError("LOCALAPPDATA est introuvable dans l’environnement")
+    path = (Path(local_appdata) / "Aveva" / "AVEVA Unified Engineering_init.log").resolve()
+    try:
+        with path.open("r", encoding="utf-8-sig", errors="replace") as journal:
+            modified = datetime.fromtimestamp(os.fstat(journal.fileno()).st_mtime).astimezone()
+            recent_lines = deque(journal, maxlen=lines)
+            print(f"Journal : {path}")
+            print(f"Dernière modification : {modified.isoformat(sep=' ', timespec='seconds')}")
+            sys.stdout.writelines(recent_lines)
+            sys.stdout.flush()
+            while follow:
+                sleep(0.25)
+                sys.stdout.writelines(journal)
+                sys.stdout.flush()
+    except FileNotFoundError:
+        raise ValueError(f"journal introuvable : {path}") from None
+    except OSError as exc:
+        raise ValueError(f"impossible de lire le journal {path} : {exc.strerror}") from exc
+    return 0
+
+
 def run_action(args, config_file):
     _, env_var, actions = PROJECTS[args.project]
     try:
+        if args.project == "aveva" and args.cmd == "log":
+            return _show_aveva_log(args.lines, args.follow)
         root_setting, commands = _settings(config_file, args.project)
         default_root = config_file.resolve().parents[3] / args.project
         root = Path(args.root or os.environ.get(env_var) or root_setting or default_root).expanduser().resolve()

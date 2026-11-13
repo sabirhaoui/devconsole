@@ -23,7 +23,6 @@
 [workspace_projects."a2-connector"]
 # root = "C:/workspace/a2-connector"
 [workspace_projects."a2-connector".commands]
-# run = ["dotnet", "run", "--project", "./src/A2.Api/A2.Api.csproj"]
 # status = ["powershell.exe", "-NoProfile", "-File", "./scripts/status.ps1"]
 # stop = ["powershell.exe", "-NoProfile", "-File", "./scripts/stop.ps1"]
 # logs = ["powershell.exe", "-NoProfile", "-File", "./scripts/logs.ps1"]

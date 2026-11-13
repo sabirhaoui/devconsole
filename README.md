@@ -25,13 +25,29 @@ La syntaxe est `lab <projet> <action> [arguments]`. Les projets sont `project_tw
 
 | Préfixe | Actions et rôle | À configurer |
 | --- | --- | --- |
-| `lab aveva` | `run` ouvre l’environnement AVEVA. `status`, `stop` et `logs` consultent l’état, arrêtent la cible ou affichent ses journaux selon les lanceurs fournis. | Les quatre actions. Pour `run`, utiliser le point d’entrée AVEVA qui applique le profil de test du poste ou de la session distante. |
+| `lab aveva` | `run` ouvre l’environnement AVEVA. `status`, `stop` et `logs` consultent l’état, arrêtent la cible ou affichent ses journaux selon les lanceurs fournis. `log` lit directement le journal de démarrage Unified Engineering. | `run`, `status`, `stop` et `logs`. Pour `run`, utiliser le point d’entrée AVEVA qui applique le profil de test du poste ou de la session distante. |
 | `lab aras` | `build` prépare le package. `run`, `status`, `stop` et `logs` pilotent l’environnement de développement. `test` lance sa suite de tests. | Les six actions, avec les points d’entrée de l’installation ou les scripts de recette Aras. |
-| `lab a2-connector` | `restore` restaure les dépendances, `build` compile, `test` lance les tests et `lint` vérifie le formatage. `run`, `status`, `stop` et `logs` pilotent l’API. `smoke` lance le scénario de vérification configuré. | `run`, `status`, `stop`, `logs` et `smoke`. Les quatre autres actions utilisent par défaut `dotnet restore`, `dotnet build`, `dotnet test` et `dotnet format --verify-no-changes`. |
+| `lab a2-connector` | Compilation, tests IFC et Aras, publication, démarrage, arrêt et santé du connecteur. | `logs` et `smoke` selon les besoins de la recette. |
 
 **Configurer les lanceurs.** Copiez [lab.local.example.toml](scripts/twins_lab/lab.local.example.toml) en `scripts/twins_lab/lab.local.toml` si ce fichier n’existe pas encore. Décommentez les actions utiles et remplacez les exemples par les points d’entrée réels. Chaque commande est une liste TOML contenant l’exécutable puis un élément par argument. Pour un script PowerShell, utilisez par exemple `["powershell.exe", "-NoProfile", "-File", "./scripts/status.ps1"]`. Les chemins relatifs sont évalués depuis la racine du projet. Le fichier local est ignoré par Git et ses commandes remplacent les valeurs par défaut action par action.
 
-Pour A2, les actions .NET nécessitent le SDK dans le `PATH` et une solution ou un projet compatible dans la racine choisie. Renseignez le chemin réel du projet de l’API pour `run`. Pour `smoke`, fournissez un script qui utilise des données de test et vérifie les flux AVEVA vers Aras et Aras vers AVEVA lorsque ces flux sont disponibles. La console exécute les lanceurs configurés. Le suivi des processus et la collecte des journaux dépendent de ces lanceurs.
+Les actions A2 utilisent le SDK .NET 10 et PowerShell 7 depuis la racine qui contient `a2-builder.slnx`. La référence de recette est la branche `tests` au commit `a3bc827`.
+
+```powershell
+lab a2-connector build
+lab a2-connector test
+lab a2-connector test-integrity
+lab a2-connector inspect-ifc '--' 'C:/exports/mon fichier.ifc'
+lab a2-connector test-api '--' -Port 18753
+lab a2-connector publish
+lab a2-connector test-published
+```
+
+Le test de contrats attend 34 contrôles réussis. Le test API attend `PASS` et vérifie la reprise jusqu’à `awaitingArtifact`. La vérification du livrable attend `OK GET /health/live`. Conservez le dossier publié complet sous `artifacts/a2-connector`.
+
+Lancez `lab a2-connector run` ou `lab a2-connector run-published` au premier plan. Dans un second terminal, utilisez `lab a2-connector health` (résultat attendu `Healthy`) puis `lab a2-connector stop`. L’hôte écoute sur `127.0.0.1:18754` et réutilise le dossier temporaire `a2-connector-devconsole` entre deux lancements.
+
+Pour la recette intégrée sur l’environnement configuré, suivez les procédures [Vault](../a2-connector/tests/recette/a2-05.md), [publication Aras](../a2-connector/tests/recette/a2-06.md) et [livraison AVEVA](../a2-connector/tests/recette/a2-07.md).
 
 **Choisir la racine.** La priorité est `--root` placé avant l’action, puis la variable du projet (`AVEVA_ROOT`, `ARAS_ROOT` ou `A2_CONNECTOR_ROOT`), puis la clé TOML `root`. Par défaut, la CLI utilise les dossiers frères `aveva`, `aras` et `a2-connector` à côté de `devConsole`.
 
@@ -43,10 +59,23 @@ lab aveva run --dry-run
 lab aras doctor
 lab aras build --dry-run
 lab a2-connector doctor
-lab a2-connector --root C:/workspace/a2-connector test --dry-run '--' --filter Category=Unit
+lab a2-connector --root C:/workspace/a2-connector test-api --dry-run '--' -Port 18753
 ```
 
 Dans PowerShell, écrivez le séparateur `'--'` entre guillemets pour transmettre les arguments suivants au lanceur. Retirez `--dry-run` lorsque la commande affichée correspond à l’action voulue.
+
+**Diagnostiquer un échec de démarrage AVEVA.** `log` lit le fichier
+`%LOCALAPPDATA%\Aveva\AVEVA Unified Engineering_init.log` de l’utilisateur courant,
+sans configuration locale. Le chemin résolu et la date de dernière modification
+s’affichent avant les dernières lignes. Comparez la date à l’heure du dernier lancement
+et cherchez le fichier et la ligne associés aux diagnostics, par exemple
+`Unsupported command exit` ou `Invalid syntax` après un changement de `custom_evars.bat`.
+
+```powershell
+lab aveva log                      # 80 dernières lignes
+lab aveva log --lines 20
+lab aveva log --lines 0 --follow   # nouvelles lignes uniquement, Ctrl+C pour quitter
+```
 
 **Essai PML dans E3D.** Après `lab aveva run`, ouvrez le projet de test dans E3D et relevez le module, le build et le `PMLLIB` de la session avec `Q EVAR PMLLIB` dans la fenêtre de commandes. Le profil AVEVA doit rendre le dossier de test accessible au processus E3D. Le chargement, le rechargement et la vérification du clic sur **Export to Aras** se font dans E3D. Ce premier essai vérifie l’affichage de l’alerte `Export to Aras — test réussi`. Le scénario `lab a2-connector smoke` correspond à la recette ultérieure des échanges du connecteur.
 
